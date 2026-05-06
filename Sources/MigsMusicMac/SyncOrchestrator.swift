@@ -38,7 +38,56 @@ enum SyncOrchestrator {
             let result = await runSyncScript(scriptURL: scriptURL, playlistName: name)
             results.append(result)
         }
+
+        // After all per-playlist syncs land, push a manifest of the full selected set and
+        // re-broadcast AUTO_IMPORT. The receiver picks up the manifest, prunes any synced
+        // playlist on the phone whose name isn't in the list (mirror semantics — uncheck a
+        // playlist on the Mac, it disappears from the phone), then deletes the manifest.
+        // This is best-effort: if it fails, the sync still succeeded for the playlists that
+        // were pushed, the user just has stale entries lingering.
+        await pushManifestAndBroadcast(playlistNames: playlistNames)
         return results
+    }
+
+    private static func pushManifestAndBroadcast(playlistNames: [String]) async {
+        guard let adb = ADBService.adbPath() else { return }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("migs-sync-manifest-\(UUID().uuidString).txt")
+        // One name per line, UTF-8. Names with embedded newlines would break this (in
+        // theory possible from Music.app, in practice essentially never).
+        let body = playlistNames.joined(separator: "\n") + "\n"
+        do {
+            try body.write(to: tempURL, atomically: true, encoding: .utf8)
+        } catch {
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        await runADB(adb: adb, args: ["push", tempURL.path, "/sdcard/Music/.migs-sync-manifest"])
+        // -f 0x20 = FLAG_INCLUDE_STOPPED_PACKAGES, same as the bash script. Without it the
+        // broadcast is silently dropped if the app's been force-stopped.
+        await runADB(
+            adb: adb,
+            args: ["shell", "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20"]
+        )
+    }
+
+    /// Fire-and-wait runner for arbitrary `adb` invocations. Output is discarded — the
+    /// caller can't usefully act on errors from these helper commands beyond logging.
+    private static func runADB(adb: String, args: [String]) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: adb)
+                task.arguments = args
+                let devnull = Pipe()
+                task.standardOutput = devnull
+                task.standardError = devnull
+                try? task.run()
+                task.waitUntilExit()
+                continuation.resume()
+            }
+        }
     }
 
     /// Looks up the bundled bash script. build.sh copies it under Contents/Resources/ as
