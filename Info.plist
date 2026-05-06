@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>MIGS Music Mac</string>
+    <string>migs music</string>
     <key>CFBundleDisplayName</key>
-    <string>MIGS Sync</string>
+    <string>migs music</string>
     <key>CFBundleIdentifier</key>
     <string>com.migsmusic.mac</string>
     <key>CFBundleExecutable</key>
@@ -25,6 +25,6 @@
     <!-- Apple Events / Automation. We need to drive Music.app via osascript; macOS will
          prompt the first time. Description shown in the system dialog. -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>MIGS Sync reads your Music app playlists so you can pick which ones to sync to your phone.</string>
+    <string>migs music reads your Music app playlists so you can pick which ones to sync to your phone.</string>
 </dict>
 </plist>

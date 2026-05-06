@@ -13,7 +13,7 @@
 #   3. For each track, checks whether the destination already exists on the phone —
 #      pushes only the missing ones (so re-syncing a playlist that overlaps with
 #      already-transferred music is effectively free).
-#   4. Pushes the M3U last, to /sdcard/Music/<playlist>.m3u, where MIGS Music's
+#   4. Pushes the M3U last, to /sdcard/Music/<playlist>.m3u, where migs music's
 #      auto-detect picks it up.
 #
 # Requirements:
@@ -154,11 +154,11 @@ while IFS=$'\t' read -r src_path artist title duration <&3; do
     fi
 done 3< "$TRACK_LIST"
 
-# 5. Push the M3U last so MIGS Music's auto-detect sees a complete playlist.
+# 5. Push the M3U last so migs music's auto-detect sees a complete playlist.
 M3U_DEST="$PHONE_MUSIC_ROOT/$PLAYLIST_NAME.m3u"
 adb push "$M3U_OUT" "$M3U_DEST" > /dev/null
 
-# 6. Trigger MIGS Music's auto-import without requiring the user to open the app or visit
+# 6. Trigger migs music's auto-import without requiring the user to open the app or visit
 #    the Playlists tab. The receiver is manifest-declared so this wakes the app from cold
 #    if needed; the import runs in well under a second. -f 0x20 sets
 #    FLAG_INCLUDE_STOPPED_PACKAGES so the broadcast also reaches the app when it's been
@@ -169,7 +169,7 @@ adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20" >
 # 7. Wait briefly for the phone to consume the M3U. The auto-import deletes the file on
 #    success — we poll for its absence so the Mac UI can confirm "imported, not just pushed".
 #    Bounded at ~5 seconds; if it's still there after that, the Mac caller can decide
-#    what to surface (probably "pushed but not yet imported — open MIGS Music to retry").
+#    what to surface (probably "pushed but not yet imported — open migs music to retry").
 imported_on_phone=false
 quoted_m3u=$(printf '%q' "$M3U_DEST")
 for _ in $(seq 1 10); do
@@ -185,7 +185,7 @@ if [[ "$imported_on_phone" == true ]]; then
     echo "✓ Synced. Phone has imported \"$PLAYLIST_NAME\"."
 else
     echo "⚠ Pushed, but phone hasn't auto-imported within 5s."
-    echo "  Open MIGS Music to trigger the import manually."
+    echo "  Open migs music to trigger the import manually."
 fi
 echo "  Pushed audio files:           $pushed"
 echo "  Already on phone (skipped):   $skipped"
