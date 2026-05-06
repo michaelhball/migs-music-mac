@@ -20,6 +20,7 @@ enum SyncOrchestrator {
     @discardableResult
     static func syncMany(
         playlistNames: [String],
+        deleteOrphanedAudio: Bool = false,
         progress: @MainActor @escaping (_ index: Int, _ total: Int, _ name: String) -> Void
     ) async -> [SyncResult] {
         guard let scriptURL = bundledScriptURL() else {
@@ -45,17 +46,29 @@ enum SyncOrchestrator {
         // playlist on the Mac, it disappears from the phone), then deletes the manifest.
         // This is best-effort: if it fails, the sync still succeeded for the playlists that
         // were pushed, the user just has stale entries lingering.
-        await pushManifestAndBroadcast(playlistNames: playlistNames)
+        await pushManifestAndBroadcast(
+            playlistNames: playlistNames,
+            deleteOrphanedAudio: deleteOrphanedAudio
+        )
         return results
     }
 
-    private static func pushManifestAndBroadcast(playlistNames: [String]) async {
+    private static func pushManifestAndBroadcast(
+        playlistNames: [String],
+        deleteOrphanedAudio: Bool
+    ) async {
         guard let adb = ADBService.adbPath() else { return }
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("migs-sync-manifest-\(UUID().uuidString).txt")
-        // One name per line, UTF-8. Names with embedded newlines would break this (in
-        // theory possible from Music.app, in practice essentially never).
-        let body = playlistNames.joined(separator: "\n") + "\n"
+        // Manifest format: optional first-line `#opts:k=v,k=v` for flags, then one playlist
+        // name per line. Names with embedded newlines would break this (in theory possible
+        // from Music.app, in practice essentially never).
+        var lines: [String] = []
+        if deleteOrphanedAudio {
+            lines.append("#opts:deleteOrphans=true")
+        }
+        lines.append(contentsOf: playlistNames)
+        let body = lines.joined(separator: "\n") + "\n"
         do {
             try body.write(to: tempURL, atomically: true, encoding: .utf8)
         } catch {

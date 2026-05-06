@@ -134,6 +134,16 @@ private struct FooterView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Destructive option: when removing a synced playlist from the phone, also
+            // delete its audio files (only the ones not referenced by any other playlist).
+            // Off by default; persisted across app restarts.
+            Toggle(isOn: $model.deleteOrphanedAudio) {
+                Text("Delete audio files when unsynced")
+                    .font(.caption)
+            }
+            .toggleStyle(.checkbox)
+            .help("When a previously-synced playlist is unchecked, also remove its audio files from the phone — but only songs not used by any other playlist.")
+
             if model.syncing {
                 HStack {
                     ProgressView().controlSize(.small)

@@ -21,6 +21,13 @@ final class AppModel: ObservableObject {
         didSet { AppModel.saveSelected(selected) }
     }
 
+    /// If true, when a sync removes a playlist from the phone, also delete its audio files
+    /// (for songs that aren't referenced by any other synced or manual playlist). Off by
+    /// default — the destructive operation should be opt-in. Persisted across launches.
+    @Published var deleteOrphanedAudio: Bool = AppModel.loadDeleteOrphans() {
+        didSet { AppModel.saveDeleteOrphans(deleteOrphanedAudio) }
+    }
+
     // MARK: - Sync
 
     @Published var syncing: Bool = false
@@ -85,7 +92,10 @@ final class AppModel: ObservableObject {
         self.currentSyncStep = 0
         self.lastResults = []
 
-        let results = await SyncOrchestrator.syncMany(playlistNames: toSync) { [weak self] index, total, name in
+        let results = await SyncOrchestrator.syncMany(
+            playlistNames: toSync,
+            deleteOrphanedAudio: deleteOrphanedAudio
+        ) { [weak self] index, total, name in
             guard let self = self else { return }
             self.currentSyncStep = index + 1
             self.totalSyncSteps = total
@@ -108,5 +118,15 @@ final class AppModel: ObservableObject {
 
     private static func saveSelected(_ selected: Set<String>) {
         UserDefaults.standard.set(Array(selected), forKey: selectedKey)
+    }
+
+    private static let deleteOrphansKey = "deleteOrphanedAudio"
+
+    private static func loadDeleteOrphans() -> Bool {
+        UserDefaults.standard.bool(forKey: deleteOrphansKey)
+    }
+
+    private static func saveDeleteOrphans(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: deleteOrphansKey)
     }
 }

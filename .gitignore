@@ -23,6 +23,11 @@ DerivedData/
 .swiftpm/
 Package.resolved
 
+# Stray incremental-build artefacts that sometimes leak into the repo root
+*.d
+*.o
+*.swiftdeps
+
 # App bundle artefacts (build.sh output)
 *.app/
 dist/
