@@ -27,7 +27,8 @@ Package.resolved
 *.d
 *.o
 *.swiftdeps
+*.swiftdeps~
 
-# App bundle artefacts (build.sh output)
+# App bundle artefacts (build.sh / release.sh output)
 *.app/
 dist/

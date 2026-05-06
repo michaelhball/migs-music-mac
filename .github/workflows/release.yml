@@ -1,0 +1,66 @@
+# Auto-publish a release when a `vX.Y.Z` tag is pushed.
+#
+# Triggered by: `git tag v0.2.0 && git push --tags`. Builds the .app + .dmg, uploads
+# to the GitHub Release for that tag (creating the Release if it doesn't already exist),
+# and bumps the Casks/migs-music.rb formula in this repo with the new version + sha256.
+#
+# Doesn't update the homebrew-migs tap repo — you still need to copy the updated Cask
+# across by hand. Wiring that up would need a personal access token with write access
+# to the tap repo, kept as a GitHub secret. Worth it eventually; for now manual.
+#
+# Free on github.com: macOS runners are billed at 10× the rate of Linux but still
+# fit within the 2000 free minutes/month for typical release cadence.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      contents: write # so the workflow can commit the Cask bump and push.
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full history so the version bump commit can be pushed back.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build .dmg
+        run: ./release.sh "${{ steps.version.outputs.version }}"
+
+      - name: Upload .dmg to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            gh release upload "v${{ steps.version.outputs.version }}" \
+              "dist/migs-music-${{ steps.version.outputs.version }}.dmg" --clobber
+          else
+            gh release create "v${{ steps.version.outputs.version }}" \
+              "dist/migs-music-${{ steps.version.outputs.version }}.dmg" \
+              --title "v${{ steps.version.outputs.version }}" \
+              --notes "Release v${{ steps.version.outputs.version }}. See commit log for changes."
+          fi
+
+      - name: Bump Casks/migs-music.rb
+        run: ./bump-cask.sh "${{ steps.version.outputs.version }}"
+
+      - name: Commit Cask bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/migs-music.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "migs-music ${{ steps.version.outputs.version }} (Cask)"
+            git push origin HEAD:main
+          fi

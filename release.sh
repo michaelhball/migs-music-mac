@@ -26,16 +26,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-VERSION="${1:-}"
-TAG_FLAG="${2:-}"
+VERSION=""
+DO_TAG=false
+DO_PUBLISH=false
 APP_NAME="MigsMusicMac"
 APP_BUNDLE="dist/${APP_NAME}.app"
 INFO_PLIST="Info.plist"
 
-if [[ -n "$VERSION" && "$VERSION" == --* ]]; then
-    echo "✗ First arg should be a version like 0.1.0, not a flag." >&2
-    exit 1
-fi
+# Arg parsing — the version is the only positional; --tag / --publish are flags.
+for arg in "$@"; do
+    case "$arg" in
+        --tag) DO_TAG=true ;;
+        --publish) DO_TAG=true; DO_PUBLISH=true ;;
+        --*) echo "✗ Unknown flag: $arg" >&2; exit 1 ;;
+        *) VERSION="$arg" ;;
+    esac
+done
 
 if [[ -n "$VERSION" ]]; then
     echo "→ Bumping version to $VERSION..."
@@ -94,25 +100,53 @@ echo "Version:  $VERSION"
 echo "SHA256:   $SHA256"
 echo ""
 
-if [[ "$TAG_FLAG" == "--tag" ]]; then
+if [[ "$DO_TAG" == true ]]; then
     if ! git diff --quiet "$INFO_PLIST"; then
         git add "$INFO_PLIST"
         git commit -m "Bump version to $VERSION"
     fi
-    git tag "v$VERSION"
-    echo "✓ Tagged v$VERSION (push with: git push --tags)"
+    if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+        echo "→ Tag v$VERSION already exists; skipping git tag."
+    else
+        git tag "v$VERSION"
+        echo "✓ Tagged v$VERSION"
+    fi
 fi
 
-cat <<EOF
+if [[ "$DO_PUBLISH" == true ]]; then
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "✗ --publish requires the GitHub CLI (gh). Install it (brew install gh) and re-run." >&2
+        exit 1
+    fi
+    echo "→ Pushing branch + tags..."
+    git push
+    git push --tags
+    echo "→ Creating GitHub release v$VERSION..."
+    if gh release view "v$VERSION" >/dev/null 2>&1; then
+        echo "  Release v$VERSION already exists; uploading asset..."
+        gh release upload "v$VERSION" "$DMG_PATH" --clobber
+    else
+        gh release create "v$VERSION" "$DMG_PATH" \
+            --title "v$VERSION" \
+            --notes "Release v$VERSION. See commit log for changes."
+    fi
+    echo "→ Bumping Cask formula..."
+    ./bump-cask.sh "$VERSION"
+    git add Casks/migs-music.rb
+    git commit -m "migs-music $VERSION (Cask)"
+    git push
+    echo ""
+    echo "✓ Published v$VERSION."
+    echo "  Don't forget to copy Casks/migs-music.rb to your homebrew-migs tap repo:"
+    echo "    cp Casks/migs-music.rb ~/projects/homebrew-migs/Casks/migs-music.rb"
+    echo "    (cd ~/projects/homebrew-migs && git add . && git commit -m 'migs-music $VERSION' && git push)"
+else
+    cat <<EOF
 
 Next steps:
   1. Test the .dmg locally:
        open "$DMG_PATH"
-  2. Upload to GitHub Releases:
-       gh release create v$VERSION "$DMG_PATH" \\
-         --title "v$VERSION" --notes "Release notes here"
-  3. Update Homebrew Cask formula (Casks/migs-music.rb in your tap):
-       version "$VERSION"
-       sha256 "$SHA256"
-  4. Bump the URL inside the Cask to the new release.
+  2. Run with --publish to push, create GitHub release, bump the Cask in one shot:
+       ./release.sh $VERSION --publish
 EOF
+fi
