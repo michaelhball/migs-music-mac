@@ -78,13 +78,62 @@ trap "rm -rf $STAGING" EXIT
 cp -R "$APP_BUNDLE" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 
+# Build a writable .dmg first so we can style the Finder window, then convert to a
+# compressed read-only .dmg for distribution. UDRW = read-write; UDZO = compressed RO.
+# Sized generously to accommodate the .app (~5 MB) + headroom for hidden Finder metadata.
+# Path inside dist/ so we don't have to fight mktemp's extension handling — hdiutil
+# silently appends `.dmg` if it's not already there.
+WRITABLE_DMG="dist/migs-music-${VERSION}-writable.dmg"
+rm -f "$WRITABLE_DMG"
+trap 'rm -rf "$STAGING" "$WRITABLE_DMG"' EXIT
 hdiutil create \
     -volname "migs music" \
     -srcfolder "$STAGING" \
     -ov \
-    -format UDZO \
+    -format UDRW \
     -fs HFS+ \
-    "$DMG_PATH"
+    -size 80m \
+    "$WRITABLE_DMG" >/dev/null
+
+# Mount the writable image. detach= explicit so we can hand the device id back to umount.
+MOUNT_INFO=$(hdiutil attach -readwrite -noverify -noautoopen "$WRITABLE_DMG")
+MOUNT_DEV=$(echo "$MOUNT_INFO" | head -1 | awk '{print $1}')
+MOUNT_POINT=$(echo "$MOUNT_INFO" | tail -1 | awk '{print $3}')
+
+# AppleScript window styling: bigger window, icon view, side-by-side .app + Applications.
+# Cosmetic — if Finder doesn't cooperate (sandbox prompts, slow boot, etc.) we ship the
+# unstyled .dmg rather than failing the whole release. `with timeout` plus `|| true`
+# protects against the common "AppleEvent timed out" error on first run.
+osascript <<APPLESCRIPT >/dev/null 2>&1 || echo "  (warning: Finder window styling skipped — .dmg is unstyled but still works)"
+with timeout of 60 seconds
+    tell application "Finder"
+        tell disk "migs music"
+            open
+            delay 2
+            set current view of container window to icon view
+            set toolbar visible of container window to false
+            set statusbar visible of container window to false
+            set the bounds of container window to {200, 100, 800, 460}
+            set theViewOptions to the icon view options of container window
+            set arrangement of theViewOptions to not arranged
+            set icon size of theViewOptions to 96
+            set position of item "MigsMusicMac.app" of container window to {160, 180}
+            set position of item "Applications" of container window to {440, 180}
+            update without registering applications
+            delay 1
+            close
+        end tell
+    end tell
+end timeout
+APPLESCRIPT
+
+# Force a sync so the metadata changes hit disk before unmount.
+sync
+
+hdiutil detach "$MOUNT_DEV" -quiet 2>/dev/null || hdiutil detach "$MOUNT_DEV" -force -quiet
+
+# Convert writable → compressed read-only.
+hdiutil convert "$WRITABLE_DMG" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG_PATH" >/dev/null
 
 # SHA256 for the Homebrew Cask formula.
 SHA_PATH="${DMG_PATH}.sha256"
