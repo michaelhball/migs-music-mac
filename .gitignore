@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Xcode (when we add a .xcodeproj)
+build/
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# App bundle artefacts (build.sh output)
+*.app/
+dist/
