@@ -36,6 +36,11 @@ First launch prompts to allow controlling Music.app — accept.
 2. Click menu-bar icon. Tick playlists.
 3. Click Sync.
 
+## Troubleshooting
+
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md) — common problems and fixes.
+
 ## Developer docs
 
 [CONTRIBUTING.md](CONTRIBUTING.md) — build internals, architecture, bundled bash script, contribution notes.
+[RELEASING.md](RELEASING.md) — version bumps, signing, GitHub Releases + Homebrew tap flow.
