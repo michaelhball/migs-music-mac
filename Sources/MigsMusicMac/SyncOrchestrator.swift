@@ -63,13 +63,17 @@ enum SyncOrchestrator {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("migs-sync-manifest-\(UUID().uuidString).txt")
         // Manifest format: optional first-line `#opts:k=v,k=v` for flags, then one playlist
-        // name per line. Names with embedded newlines would break this (in theory possible
-        // from Music.app, in practice essentially never).
+        // name per line. Strip any embedded newlines / carriage returns from playlist names
+        // — Music.app theoretically allows them but they'd corrupt the line-per-name format.
+        // Also drop any name starting with `#` so it can't be mistaken for an opts line.
+        let sanitized = playlistNames
+            .map { $0.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ") }
+            .filter { !$0.hasPrefix("#") && !$0.isEmpty }
         var lines: [String] = []
         if deleteOrphanedAudio {
             lines.append("#opts:deleteOrphans=true")
         }
-        lines.append(contentsOf: playlistNames)
+        lines.append(contentsOf: sanitized)
         let body = lines.joined(separator: "\n") + "\n"
         do {
             try body.write(to: tempURL, atomically: true, encoding: .utf8)

@@ -96,10 +96,34 @@ private struct PlaylistListView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.playlists) { playlist in
-                        PlaylistRow(playlist: playlist, model: model)
+            VStack(alignment: .leading, spacing: 6) {
+                // Show the search field only when there are enough playlists for it to be
+                // useful. Below ~10 you can scan visually faster than typing.
+                if model.playlists.count > 10 {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.secondary)
+                        TextField("Search playlists", text: $model.searchQuery)
+                            .textFieldStyle(.plain)
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                }
+
+                let visible = model.visiblePlaylists
+                if visible.isEmpty {
+                    Text("No playlists match \"\(model.searchQuery)\".")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(visible) { playlist in
+                                PlaylistRow(playlist: playlist, model: model)
+                            }
+                        }
                     }
                 }
             }

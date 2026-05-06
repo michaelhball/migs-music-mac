@@ -15,6 +15,19 @@ final class AppModel: ObservableObject {
     @Published var loadingPlaylists: Bool = false
     @Published var playlistsError: String?
 
+    /// Filter text typed into the search field; case-insensitive substring match against
+    /// playlist names. Empty string = show everything. Not persisted — every fresh popover
+    /// open starts with no filter.
+    @Published var searchQuery: String = ""
+
+    /// Playlists filtered by [searchQuery]. The view consumes this instead of [playlists]
+    /// directly so the filter is applied in one place.
+    var visiblePlaylists: [MusicPlaylist] {
+        if searchQuery.isEmpty { return playlists }
+        let query = searchQuery.lowercased()
+        return playlists.filter { $0.name.lowercased().contains(query) }
+    }
+
     /// Names of playlists currently selected for sync. Persisted across app launches via
     /// UserDefaults so the user doesn't have to re-tick every checkbox after a restart.
     @Published var selected: Set<String> = AppModel.loadSelected() {
