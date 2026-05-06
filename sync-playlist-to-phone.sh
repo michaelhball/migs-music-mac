@@ -112,6 +112,8 @@ for candidate in \
 done
 
 PHONE_MUSIC_ROOT="/sdcard/Music"
+PHONE_SYNC_DIR="/sdcard/Android/media/com.migsmusic/sync"
+adb shell "mkdir -p '$PHONE_SYNC_DIR'" > /dev/null
 M3U_OUT="$TMP_DIR/$PLAYLIST_NAME.m3u"
 
 pushed=0
@@ -168,7 +170,10 @@ while IFS=$'\t' read -r src_path artist title duration <&3; do
 done 3< "$TRACK_LIST"
 
 # 5. Push the M3U last so migs music's auto-detect sees a complete playlist.
-M3U_DEST="$PHONE_MUSIC_ROOT/$PLAYLIST_NAME.m3u"
+# M3U lands in the app's media dir (not /sdcard/Music) — Android 11+ refuses to grant
+# SAF access to /sdcard/Music, but /sdcard/Android/media/<package>/ is owned by us and
+# needs no permission.
+M3U_DEST="$PHONE_SYNC_DIR/$PLAYLIST_NAME.m3u"
 adb push "$M3U_OUT" "$M3U_DEST" > /dev/null
 
 # 6. Trigger migs music's auto-import without requiring the user to open the app or visit

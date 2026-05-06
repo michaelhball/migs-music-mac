@@ -78,7 +78,11 @@ enum SyncOrchestrator {
         }
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
-        await runADB(adb: adb, args: ["push", tempURL.path, "/sdcard/Music/.migs-sync-manifest"])
+        // Ensure the sync dir exists before pushing the manifest. mkdir -p is a no-op if
+        // it already does. /sdcard/Android/media/<pkg>/ is created lazily by Android the
+        // first time anyone writes there; we don't depend on the app having run before.
+        await runADB(adb: adb, args: ["shell", "mkdir -p /sdcard/Android/media/com.migsmusic/sync"])
+        await runADB(adb: adb, args: ["push", tempURL.path, "/sdcard/Android/media/com.migsmusic/sync/.migs-sync-manifest"])
     }
 
     private static func broadcastAutoImport() async {
