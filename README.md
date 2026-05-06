@@ -1,54 +1,41 @@
-# MIGS Music Mac
+# migs music (Mac)
 
-Mac-side companion to the [MIGS Music](../migs-music) Android player. Sits in your menu bar, lists your Apple Music playlists, and one-click-syncs any of them to your phone — copying only the audio files that aren't already there, generating a fresh `.m3u`, and dropping the lot into the phone's Music folder so the Android app can import it.
+Menu-bar app that syncs Apple Music playlists to the [migs music](../migs-music) Android player over USB.
 
-## Status
+Status: in active development. Build from source for now.
 
-**Scripts work, menu bar app not yet built.** The two shell tools are battle-tested end-to-end (8/8 tracks synced + imported on a real device). The SwiftUI menu bar wrapper is the next piece — see *Plan* below.
+## What it does
 
-## What's here today
+- Lists your Music.app user playlists in the menu bar.
+- Tick playlists → click Sync → audio files + `.m3u` land on the phone, in `Artist/Album/Track` structure.
+- Already-on-phone tracks are skipped; re-syncing is effectively free.
+- Mirror semantics: only ticked playlists exist on the phone after a sync. Untick → next sync removes from phone.
+- Optional "delete audio files when unsynced" checkbox: also removes audio for songs no other playlist references. Default off.
+- Auto-polls phone connection state while the menu is open.
 
-- **`sync-playlist-to-phone.sh "<playlist name>"`** — pushes a Music.app playlist + every audio file it references to a USB-connected Android phone, dedups by destination path so re-syncing is effectively free for already-pushed audio, broadcasts a media-scanner request per file so Android picks up the ID3 tags immediately, and writes the M3U last so MIGS Music's auto-detect picks it up cleanly.
+## Prerequisites
 
-- **`export-playlist-as-m3u.applescript`** — standalone AppleScript that just exports a Music.app playlist to a `.m3u` file. Useful if you want to test the Android importer without copying audio.
+- macOS 13+ with Apple Music.
+- ADB installed (`brew install android-platform-tools` or via Android Studio).
+- Phone with USB debugging on, plugged in, authorised (`adb devices`).
+- migs music Android app installed on the phone.
 
-### Prerequisites
-
-- macOS with Apple Music.
-- Phone connected via USB with ADB authorised (`adb devices` should show one device).
-- First time you run `sync-playlist-to-phone.sh`, macOS will ask Terminal for permission to control Music.app — click *OK*.
-
-### Usage
+## Installing
 
 ```bash
-./sync-playlist-to-phone.sh "My Test Playlist"
+./build.sh                                  # produces dist/MigsMusicMac.app
+cp -R dist/MigsMusicMac.app /Applications/
+open /Applications/MigsMusicMac.app
 ```
 
-The script reports per-file pushes, totals, and any tracks it couldn't transfer (streaming-only Apple Music tracks have no local file).
+First launch prompts to allow controlling Music.app — accept.
 
-## Plan: menu bar app
+## Usage
 
-When built, the app will:
+1. Plug phone in.
+2. Click menu-bar icon. Tick playlists.
+3. Click Sync.
 
-1. Live in the macOS menu bar (no Dock icon).
-2. On click, drop down a list of your Apple Music user playlists.
-3. Each playlist row has a *Sync to phone* button.
-4. Tap → shells out to `sync-playlist-to-phone.sh` with the playlist name; shows progress in the popover.
-5. Reports completion with track counts (pushed / skipped / unmatched).
+## Developer docs
 
-Architecture sketch:
-
-```
-Sources/MigsMusicMac/
-├── MigsMusicMacApp.swift     # @main App with MenuBarExtra
-├── AppModel.swift            # ObservableObject — playlists, status
-├── MusicAppService.swift     # osascript wrapper for "list playlists"
-├── SyncService.swift         # Process wrapper for sync-playlist-to-phone.sh
-└── ContentView.swift         # The menu bar dropdown UI
-```
-
-Build approach (no Xcode required for users): a small `build.sh` that compiles the Swift sources with `swiftc`, assembles a proper `.app` bundle (with `Info.plist` setting `LSUIElement = true` so it stays out of the Dock), and copies the bash + AppleScript files into the bundle's `Resources/` so the running app can shell out to them via `Bundle.main.url(forResource:withExtension:)`.
-
-## Git layout
-
-This is a separate repo from `migs-music` (the Android app). Single git history per platform — Android-side commits don't clutter the Mac project, and vice versa. `device-smoke-test.sh` (the Android instrumentation runner) stays in the Android repo since it's specific to that side.
+[CONTRIBUTING.md](CONTRIBUTING.md) — build internals, architecture, bundled bash script, contribution notes.
