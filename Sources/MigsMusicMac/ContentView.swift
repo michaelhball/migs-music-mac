@@ -156,6 +156,19 @@ private struct PlaylistRow: View {
 private struct FooterView: View {
     @ObservedObject var model: AppModel
 
+    /// Tooltip text for the Sync button — explains why it's disabled when applicable. The
+    /// button itself shows the playlist count, so the disabled state isn't self-explanatory.
+    private var syncHelpText: String {
+        if model.syncing { return "Sync in progress." }
+        if model.selected.isEmpty { return "Tick at least one playlist above to enable Sync." }
+        switch model.deviceState {
+        case .connected: return "Push the ticked playlists to the connected phone."
+        case .noDevice: return "Plug your phone in via USB to enable Sync."
+        case .unauthorized: return "Accept the USB-debugging dialog on your phone, then click Refresh."
+        case .noAdb: return "Install Android platform-tools (e.g. `brew install android-platform-tools`)."
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Destructive option: when removing a synced playlist from the phone, also
@@ -202,6 +215,7 @@ private struct FooterView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.canSync)
+                .help(syncHelpText)
 
                 Spacer()
 
