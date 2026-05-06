@@ -144,11 +144,11 @@ while IFS=$'\t' read -r src_path artist title duration <&3; do
         adb shell "mkdir -p $quoted_dir" > /dev/null
         # `adb push` handles spaces in the destination natively, no extra quoting needed.
         adb push "$src_path" "$dest_path" > /dev/null
-        # adb push lands the file but Android's MediaStore won't read the ID3 tags from
-        # it until something explicitly triggers MEDIA_SCANNER_SCAN_FILE. Without this,
-        # the file appears in MediaStore with artist=NULL / title=filename and our M3U
-        # matcher can't pair it with EXTINF metadata.
-        adb shell "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://$quoted_dest" > /dev/null 2>&1
+        # MediaStore picks up files in /sdcard/Music automatically on Android 11+ (FUSE
+        # emulation surfaces the write to MediaProvider). The deprecated
+        # MEDIA_SCANNER_SCAN_FILE broadcast is now a no-op on most devices, so we let the
+        # platform handle indexing. The receiver-side scanDevice() call before import is
+        # what guarantees freshly-pushed files are visible to the matcher.
         pushed=$((pushed + 1))
         echo "  + $rel_path"
     fi
@@ -160,8 +160,11 @@ adb push "$M3U_OUT" "$M3U_DEST" > /dev/null
 
 # 6. Trigger MIGS Music's auto-import without requiring the user to open the app or visit
 #    the Playlists tab. The receiver is manifest-declared so this wakes the app from cold
-#    if needed; the import runs in well under a second.
-adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic" > /dev/null 2>&1 || true
+#    if needed; the import runs in well under a second. -f 0x20 sets
+#    FLAG_INCLUDE_STOPPED_PACKAGES so the broadcast also reaches the app when it's been
+#    force-stopped (fresh install, system kill, Settings → force stop) — without it, the
+#    receiver is silently skipped and the user has to open the app to trigger import manually.
+adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20" > /dev/null 2>&1 || true
 
 # 7. Wait briefly for the phone to consume the M3U. The auto-import deletes the file on
 #    success — we poll for its absence so the Mac UI can confirm "imported, not just pushed".
