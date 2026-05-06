@@ -26,9 +26,22 @@
 
 set -euo pipefail
 
-PLAYLIST_NAME="${1:-}"
+BROADCAST_ON_DONE=true
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-broadcast)
+            BROADCAST_ON_DONE=false
+            ;;
+        *)
+            ARGS+=("$arg")
+            ;;
+    esac
+done
+
+PLAYLIST_NAME="${ARGS[0]:-}"
 if [[ -z "$PLAYLIST_NAME" ]]; then
-    echo "Usage: $0 \"<playlist name>\"" >&2
+    echo "Usage: $0 [--no-broadcast] \"<playlist name>\"" >&2
     exit 1
 fi
 
@@ -164,24 +177,35 @@ adb push "$M3U_OUT" "$M3U_DEST" > /dev/null
 #    FLAG_INCLUDE_STOPPED_PACKAGES so the broadcast also reaches the app when it's been
 #    force-stopped (fresh install, system kill, Settings → force stop) — without it, the
 #    receiver is silently skipped and the user has to open the app to trigger import manually.
-adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20" > /dev/null 2>&1 || true
+#
+# When invoked via the Mac orchestrator (`--no-broadcast`), the orchestrator pushes the
+# manifest and broadcasts ONCE at the end of all per-playlist syncs — the receiver then
+# does all imports + per-song orphan cleanup + whole-playlist prune in a single atomic
+# pass. Per-playlist broadcasting in that flow would race with the still-unwritten
+# manifest and miss the deleteOrphans flag.
+imported_on_phone=true
+if [[ "$BROADCAST_ON_DONE" == true ]]; then
+    adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20" > /dev/null 2>&1 || true
 
-# 7. Wait briefly for the phone to consume the M3U. The auto-import deletes the file on
-#    success — we poll for its absence so the Mac UI can confirm "imported, not just pushed".
-#    Bounded at ~5 seconds; if it's still there after that, the Mac caller can decide
-#    what to surface (probably "pushed but not yet imported — open migs music to retry").
-imported_on_phone=false
-quoted_m3u=$(printf '%q' "$M3U_DEST")
-for _ in $(seq 1 10); do
-    if ! adb shell "[ -e $quoted_m3u ]" > /dev/null 2>&1; then
-        imported_on_phone=true
-        break
-    fi
-    sleep 0.5
-done
+    # Wait briefly for the phone to consume the M3U. The auto-import deletes the file on
+    # success — we poll for its absence so the Mac UI can confirm "imported, not just
+    # pushed". Bounded at ~5s; if still there after that, the Mac caller surfaces
+    # "pushed but not yet imported".
+    imported_on_phone=false
+    quoted_m3u=$(printf '%q' "$M3U_DEST")
+    for _ in $(seq 1 10); do
+        if ! adb shell "[ -e $quoted_m3u ]" > /dev/null 2>&1; then
+            imported_on_phone=true
+            break
+        fi
+        sleep 0.5
+    done
+fi
 
 echo ""
-if [[ "$imported_on_phone" == true ]]; then
+if [[ "$BROADCAST_ON_DONE" == false ]]; then
+    echo "✓ Pushed (orchestrator will broadcast at end)."
+elif [[ "$imported_on_phone" == true ]]; then
     echo "✓ Synced. Phone has imported \"$PLAYLIST_NAME\"."
 else
     echo "⚠ Pushed, but phone hasn't auto-imported within 5s."

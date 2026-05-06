@@ -33,27 +33,29 @@ enum SyncOrchestrator {
             }
         }
 
+        // Push the manifest BEFORE running per-playlist syncs so the deleteOrphans flag is
+        // available to the receiver during each per-playlist replace (per-song orphan
+        // cleanup). Pushing it after-the-fact would only catch whole-playlist removals.
+        await pushManifest(playlistNames: playlistNames, deleteOrphanedAudio: deleteOrphanedAudio)
+
         var results: [SyncResult] = []
         for (index, name) in playlistNames.enumerated() {
             await MainActor.run { progress(index, playlistNames.count, name) }
-            let result = await runSyncScript(scriptURL: scriptURL, playlistName: name)
+            // --no-broadcast: per-playlist runs just push files; the orchestrator broadcasts
+            // ONCE at the end so the receiver does all imports + orphan cleanup + prune
+            // atomically. Per-playlist broadcasting would race with the manifest read.
+            let result = await runSyncScript(scriptURL: scriptURL, playlistName: name, noBroadcast: true)
             results.append(result)
         }
 
-        // After all per-playlist syncs land, push a manifest of the full selected set and
-        // re-broadcast AUTO_IMPORT. The receiver picks up the manifest, prunes any synced
-        // playlist on the phone whose name isn't in the list (mirror semantics — uncheck a
-        // playlist on the Mac, it disappears from the phone), then deletes the manifest.
-        // This is best-effort: if it fails, the sync still succeeded for the playlists that
-        // were pushed, the user just has stale entries lingering.
-        await pushManifestAndBroadcast(
-            playlistNames: playlistNames,
-            deleteOrphanedAudio: deleteOrphanedAudio
-        )
+        // Single AUTO_IMPORT broadcast after all syncs land. Receiver reads manifest,
+        // imports any pending m3u files (with per-song orphan cleanup), prunes whole
+        // playlists not in the manifest, deletes the manifest. One atomic pass.
+        await broadcastAutoImport()
         return results
     }
 
-    private static func pushManifestAndBroadcast(
+    private static func pushManifest(
         playlistNames: [String],
         deleteOrphanedAudio: Bool
     ) async {
@@ -77,6 +79,10 @@ enum SyncOrchestrator {
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
         await runADB(adb: adb, args: ["push", tempURL.path, "/sdcard/Music/.migs-sync-manifest"])
+    }
+
+    private static func broadcastAutoImport() async {
+        guard let adb = ADBService.adbPath() else { return }
         // -f 0x20 = FLAG_INCLUDE_STOPPED_PACKAGES, same as the bash script. Without it the
         // broadcast is silently dropped if the app's been force-stopped.
         await runADB(
@@ -110,12 +116,19 @@ enum SyncOrchestrator {
         Bundle.main.url(forResource: "sync-playlist-to-phone", withExtension: "sh")
     }
 
-    private static func runSyncScript(scriptURL: URL, playlistName: String) async -> SyncResult {
+    private static func runSyncScript(
+        scriptURL: URL,
+        playlistName: String,
+        noBroadcast: Bool = false
+    ) async -> SyncResult {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/bin/bash")
-                task.arguments = [scriptURL.path, playlistName]
+                var args = [scriptURL.path]
+                if noBroadcast { args.append("--no-broadcast") }
+                args.append(playlistName)
+                task.arguments = args
                 // Inherit a sane PATH so `adb` / `osascript` resolve the same way they would
                 // from a Terminal session. The bash script also has explicit candidate paths
                 // for adb internally, but giving it PATH access first keeps things tidy.
