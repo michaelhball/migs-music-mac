@@ -13,6 +13,15 @@ struct ContentView: View {
         }
         .padding(12)
         .frame(width: 320, height: 460)
+        // Poll the ADB device state while the menu is visible so plugging in a phone after
+        // opening the popover updates the UI without a manual refresh. .task is cancelled
+        // automatically when the view disappears (popover closes), so polling stops too.
+        .task {
+            while !Task.isCancelled {
+                await model.refreshDevice()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
     }
 }
 
@@ -24,19 +33,27 @@ private struct HeaderView: View {
             Image(systemName: "music.note.list")
                 .imageScale(.large)
             VStack(alignment: .leading, spacing: 2) {
-                Text("MIGS Sync").font(.headline)
+                Text("migs music").font(.headline)
                 deviceLabel
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
             Spacer()
+            // Manual refresh: re-check the connected ADB device AND re-read playlists from
+            // Music.app. Both are cheap. The label is rendered inline next to the icon
+            // because .help() tooltips don't reliably appear inside MenuBarExtra(.window).
             Button {
-                Task { await model.refreshDevice() }
+                Task {
+                    async let device: () = model.refreshDevice()
+                    async let playlists: () = model.refreshPlaylists()
+                    _ = await (device, playlists)
+                }
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .font(.caption)
             }
             .buttonStyle(.borderless)
-            .help("Re-check device + reload playlists")
+            .help("Re-check phone connection and reload playlists from Music.app")
         }
     }
 
