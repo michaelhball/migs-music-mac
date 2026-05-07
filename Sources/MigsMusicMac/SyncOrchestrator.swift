@@ -85,36 +85,24 @@ enum SyncOrchestrator {
         // Ensure the sync dir exists before pushing the manifest. mkdir -p is a no-op if
         // it already does. /sdcard/Android/media/<pkg>/ is created lazily by Android the
         // first time anyone writes there; we don't depend on the app having run before.
-        await runADB(adb: adb, args: ["shell", "mkdir -p /sdcard/Android/media/com.migsmusic/sync"])
-        await runADB(adb: adb, args: ["push", tempURL.path, "/sdcard/Android/media/com.migsmusic/sync/.migs-sync-manifest"])
+        _ = await ProcessRunner.run(
+            executable: adb,
+            arguments: ["shell", "mkdir -p /sdcard/Android/media/com.migsmusic/sync"]
+        )
+        _ = await ProcessRunner.run(
+            executable: adb,
+            arguments: ["push", tempURL.path, "/sdcard/Android/media/com.migsmusic/sync/.migs-sync-manifest"]
+        )
     }
 
     private static func broadcastAutoImport() async {
         guard let adb = ADBService.adbPath() else { return }
         // -f 0x20 = FLAG_INCLUDE_STOPPED_PACKAGES, same as the bash script. Without it the
         // broadcast is silently dropped if the app's been force-stopped.
-        await runADB(
-            adb: adb,
-            args: ["shell", "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20"]
+        _ = await ProcessRunner.run(
+            executable: adb,
+            arguments: ["shell", "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20"]
         )
-    }
-
-    /// Fire-and-wait runner for arbitrary `adb` invocations. Output is discarded — the
-    /// caller can't usefully act on errors from these helper commands beyond logging.
-    private static func runADB(adb: String, args: [String]) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: adb)
-                task.arguments = args
-                let devnull = Pipe()
-                task.standardOutput = devnull
-                task.standardError = devnull
-                try? task.run()
-                task.waitUntilExit()
-                continuation.resume()
-            }
-        }
     }
 
     /// Looks up the bundled bash script. build.sh copies it under Contents/Resources/ as
@@ -129,58 +117,37 @@ enum SyncOrchestrator {
         playlistName: String,
         noBroadcast: Bool = false
     ) async -> SyncResult {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/bin/bash")
-                var args = [scriptURL.path]
-                if noBroadcast { args.append("--no-broadcast") }
-                args.append(playlistName)
-                task.arguments = args
-                // Inherit a sane PATH so `adb` / `osascript` resolve the same way they would
-                // from a Terminal session. The bash script also has explicit candidate paths
-                // for adb internally, but giving it PATH access first keeps things tidy.
-                var env = ProcessInfo.processInfo.environment
-                env["PATH"] =
-                    [
-                        env["PATH"] ?? "",
-                        "/opt/homebrew/bin",
-                        "/usr/local/bin",
-                        "\(NSHomeDirectory())/Library/Android/sdk/platform-tools",
-                    ]
-                    .filter { !$0.isEmpty }
-                    .joined(separator: ":")
-                task.environment = env
+        var args = [scriptURL.path]
+        if noBroadcast { args.append("--no-broadcast") }
+        args.append(playlistName)
 
-                let pipe = Pipe()
-                task.standardOutput = pipe
-                task.standardError = pipe
+        // Inherit a sane PATH so `adb` / `osascript` resolve the same way they would
+        // from a Terminal session. The bash script also has explicit candidate paths
+        // for adb internally, but giving it PATH access first keeps things tidy.
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] =
+            [
+                env["PATH"] ?? "",
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "\(NSHomeDirectory())/Library/Android/sdk/platform-tools",
+            ]
+            .filter { !$0.isEmpty }
+            .joined(separator: ":")
 
-                do {
-                    try task.run()
-                } catch {
-                    continuation.resume(
-                        returning: SyncResult(
-                            playlistName: playlistName,
-                            success: false,
-                            output: "Failed to launch script: \(error.localizedDescription)"
-                        )
-                    )
-                    return
-                }
-                task.waitUntilExit()
-                let output = String(
-                    data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                    encoding: .utf8
-                ) ?? ""
-                continuation.resume(
-                    returning: SyncResult(
-                        playlistName: playlistName,
-                        success: task.terminationStatus == 0,
-                        output: output
-                    )
-                )
-            }
-        }
+        // Merge stdout + stderr — the bash script interleaves progress with errors and
+        // we want chronological output for debugging. The combined buffer is what we
+        // surface as `output` on the SyncResult.
+        let result = await ProcessRunner.run(
+            executable: "/bin/bash",
+            arguments: args,
+            environment: env,
+            mergeStreams: true
+        )
+        return SyncResult(
+            playlistName: playlistName,
+            success: result.ok,
+            output: result.stdout
+        )
     }
 }

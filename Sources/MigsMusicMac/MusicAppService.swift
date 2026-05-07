@@ -1,7 +1,7 @@
 import Foundation
 
 /// One Music.app user playlist that the user can choose to sync.
-struct MusicPlaylist: Identifiable, Hashable {
+struct MusicPlaylist: Identifiable, Hashable, Codable {
     /// Use the name as the id — Music.app's internal IDs aren't stable across launches in a
     /// way we can rely on, and AppleScript-friendly identification is the playlist name.
     /// Two playlists with the same name would collide; we let that surface as a UI bug to fix
@@ -43,49 +43,30 @@ enum MusicAppService {
             return out
         end tell
         """#
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                task.arguments = ["-e", script]
-                let outPipe = Pipe()
-                let errPipe = Pipe()
-                task.standardOutput = outPipe
-                task.standardError = errPipe
-                do {
-                    try task.run()
-                } catch {
-                    continuation.resume(returning: .failure(.scriptFailed(error.localizedDescription)))
-                    return
-                }
-                task.waitUntilExit()
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                let stdout = String(data: outData, encoding: .utf8) ?? ""
-                let stderr = String(data: errData, encoding: .utf8) ?? ""
 
-                if task.terminationStatus != 0 {
-                    if stderr.contains("Not authorised") || stderr.contains("Not authorized") || stderr.contains("-1743") {
-                        continuation.resume(returning: .failure(.notAuthorised))
-                    } else {
-                        continuation.resume(returning: .failure(.scriptFailed(stderr.isEmpty ? stdout : stderr)))
-                    }
-                    return
-                }
+        let result = await ProcessRunner.run(
+            executable: "/usr/bin/osascript",
+            arguments: ["-e", script]
+        )
 
-                let playlists = stdout
-                    .split(separator: "\n", omittingEmptySubsequences: true)
-                    .compactMap { line -> MusicPlaylist? in
-                        // Split on first tab; a stray tab in a name (rare) becomes part of name.
-                        guard let tabIndex = line.firstIndex(of: "\t") else { return nil }
-                        let countString = String(line[..<tabIndex])
-                        let name = String(line[line.index(after: tabIndex)...])
-                        guard let count = Int(countString.trimmingCharacters(in: .whitespaces)) else { return nil }
-                        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-                        return trimmedName.isEmpty ? nil : MusicPlaylist(name: trimmedName, trackCount: count)
-                    }
-                continuation.resume(returning: .success(playlists))
+        if !result.ok {
+            let stderr = result.stderr
+            if stderr.contains("Not authorised") || stderr.contains("Not authorized") || stderr.contains("-1743") {
+                return .failure(.notAuthorised)
             }
+            return .failure(.scriptFailed(stderr.isEmpty ? result.stdout : stderr))
         }
+
+        let playlists = result.stdout
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line -> MusicPlaylist? in
+                // Split on first tab; a stray tab in a name (rare) becomes part of name.
+                let parts = line.split(separator: "\t", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                guard let count = Int(parts[0].trimmingCharacters(in: .whitespaces)) else { return nil }
+                let trimmedName = parts[1].trimmingCharacters(in: .whitespaces)
+                return trimmedName.isEmpty ? nil : MusicPlaylist(name: trimmedName, trackCount: count)
+            }
+        return .success(playlists)
     }
 }
