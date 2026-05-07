@@ -32,3 +32,6 @@ Package.resolved
 # App bundle artefacts (build.sh / release.sh output)
 *.app/
 dist/
+
+# Local-only planning / notes
+workspace/
