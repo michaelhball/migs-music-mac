@@ -228,8 +228,8 @@ private struct FooterView: View {
                 Spacer()
 
                 Text("v\(appVersion)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary.opacity(0.7))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                     .help("migs music \(appVersion)")
                     .padding(.trailing, 4)
 
