@@ -72,7 +72,18 @@ final class AppModel: ObservableObject {
         self.deviceState = state
     }
 
+    /// Re-entrancy guard so mashing the Refresh button doesn't kick off overlapping
+    /// AppleScript invocations. Without this, a second click while the first is in flight
+    /// would: (a) flicker the loading spinner state on→off→on, and (b) waste a second
+    /// 200-1000ms Music.app round trip whose result clobbers the first's. Single-flight
+    /// is the correct semantic — concurrent callers all observe the same fresh data.
+    private var refreshPlaylistsInFlight: Bool = false
+
     func refreshPlaylists() async {
+        guard !refreshPlaylistsInFlight else { return }
+        refreshPlaylistsInFlight = true
+        defer { refreshPlaylistsInFlight = false }
+
         self.loadingPlaylists = true
         self.playlistsError = nil
         let result = await MusicAppService.listPlaylists()
