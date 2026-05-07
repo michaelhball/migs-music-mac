@@ -53,7 +53,8 @@ private struct HeaderView: View {
                     .font(.caption)
             }
             .buttonStyle(.borderless)
-            .help("Re-check phone connection and reload playlists from Music.app")
+            .keyboardShortcut("r", modifiers: .command)
+            .help("Re-check phone connection and reload playlists (⌘R)")
         }
     }
 
@@ -221,7 +222,8 @@ private struct FooterView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.canSync)
-                .help(syncHelpText)
+                .keyboardShortcut(.return, modifiers: .command)
+                .help("\(syncHelpText) (⌘↩)")
 
                 Spacer()
 
