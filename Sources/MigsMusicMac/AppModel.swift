@@ -11,7 +11,10 @@ final class AppModel: ObservableObject {
 
     // MARK: - Playlists
 
-    @Published var playlists: [MusicPlaylist] = []
+    /// Hydrated from UserDefaults at init so app launch feels instant — the popover
+    /// shows the previous session's list immediately, then we refresh in the background.
+    /// On a clean install this is empty and we fall back to the spinner UX.
+    @Published var playlists: [MusicPlaylist] = AppModel.loadCachedPlaylists()
     @Published var loadingPlaylists: Bool = false
     @Published var playlistsError: String?
 
@@ -84,18 +87,27 @@ final class AppModel: ObservableObject {
         refreshPlaylistsInFlight = true
         defer { refreshPlaylistsInFlight = false }
 
-        self.loadingPlaylists = true
+        // Only show the spinner if we have nothing to display. With a cached list from
+        // the previous session we'd rather keep showing it while we refresh silently —
+        // the spinner-then-list flicker is worse UX than a few seconds of slightly-stale data.
+        let hasCached = !self.playlists.isEmpty
+        if !hasCached { self.loadingPlaylists = true }
         self.playlistsError = nil
         let result = await MusicAppService.listPlaylists()
         self.loadingPlaylists = false
         switch result {
         case .success(let list):
             self.playlists = list
+            AppModel.saveCachedPlaylists(list)
             // Drop any stale selections referring to playlists that no longer exist.
             let liveNames = Set(list.map { $0.name })
             self.selected = self.selected.intersection(liveNames)
         case .failure(let error):
-            self.playlistsError = error.localizedDescription
+            // Surface the error only if we have no cached data to fall back on. Silent
+            // failure with cached data is intentional — Refresh button retries on demand.
+            if !hasCached {
+                self.playlistsError = error.localizedDescription
+            }
         }
     }
 
@@ -183,5 +195,22 @@ final class AppModel: ObservableObject {
 
     private static func saveDeleteOrphans(_ value: Bool) {
         UserDefaults.standard.set(value, forKey: deleteOrphansKey)
+    }
+
+    private static let playlistsCacheKey = "cachedPlaylists"
+
+    /// Decoded best-effort. If MusicPlaylist's schema ever changes incompatibly, the
+    /// decode fails silently and we fall back to a clean fetch — no migration needed.
+    private static func loadCachedPlaylists() -> [MusicPlaylist] {
+        guard
+            let data = UserDefaults.standard.data(forKey: playlistsCacheKey),
+            let list = try? JSONDecoder().decode([MusicPlaylist].self, from: data)
+        else { return [] }
+        return list
+    }
+
+    private static func saveCachedPlaylists(_ list: [MusicPlaylist]) {
+        guard let data = try? JSONEncoder().encode(list) else { return }
+        UserDefaults.standard.set(data, forKey: playlistsCacheKey)
     }
 }
