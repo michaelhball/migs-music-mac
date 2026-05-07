@@ -50,11 +50,19 @@ final class AppModel: ObservableObject {
     @Published var currentSyncName: String = ""
     @Published var lastResults: [SyncResult] = []
 
+    // MARK: - Updates
+
+    /// Latest GitHub release if it's newer than the running version. Drives the in-app
+    /// update banner. nil = no banner (either we're up-to-date or the check hasn't run /
+    /// has failed silently).
+    @Published var availableUpdate: AvailableUpdate?
+
     // MARK: - Lifecycle
 
     init() {
         Task { await refreshDevice() }
         Task { await refreshPlaylists() }
+        Task { await checkForUpdate() }
     }
 
     // MARK: - Actions
@@ -118,6 +126,29 @@ final class AppModel: ObservableObject {
         self.lastResults = results
         self.currentSyncName = ""
         self.syncing = false
+    }
+
+    /// Throttled to once per 6 hours via UserDefaults — the menu opens dozens of times a
+    /// day and we don't need GitHub-API hits on every popover. The throttle timestamp
+    /// only advances on a *successful* HTTP response, so a transient network failure
+    /// doesn't silence the check for hours; we'll retry on the next launch.
+    func checkForUpdate() async {
+        let key = "lastUpdateCheckAt"
+        let now = Date()
+        if let last = UserDefaults.standard.object(forKey: key) as? Date,
+           now.timeIntervalSince(last) < 6 * 60 * 60 {
+            return
+        }
+        switch await UpdateChecker.check() {
+        case .update(let update):
+            self.availableUpdate = update
+            UserDefaults.standard.set(now, forKey: key)
+        case .upToDate:
+            self.availableUpdate = nil
+            UserDefaults.standard.set(now, forKey: key)
+        case .failed:
+            break
+        }
     }
 
     // MARK: - Persistence

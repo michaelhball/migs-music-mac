@@ -5,6 +5,9 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let update = model.availableUpdate {
+                UpdateBanner(update: update)
+            }
             HeaderView(model: model)
             Divider()
             PlaylistListView(model: model)
@@ -22,6 +25,33 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
+    }
+}
+
+private struct UpdateBanner: View {
+    let update: AvailableUpdate
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(update.releaseURL)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundColor(.accentColor)
+                Text("Update available — v\(update.version)")
+                    .font(.caption)
+                Spacer()
+                Image(systemName: "arrow.up.right.square")
+                    .imageScale(.small)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open the v\(update.version) release notes — has install instructions for both Homebrew and direct download.")
     }
 }
 
