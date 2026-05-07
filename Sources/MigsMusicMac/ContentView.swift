@@ -156,6 +156,12 @@ private struct PlaylistRow: View {
 private struct FooterView: View {
     @ObservedObject var model: AppModel
 
+    /// Reads CFBundleShortVersionString from the running .app's Info.plist. Falls back
+    /// to "?" if for some reason it's not set (shouldn't happen in a built bundle).
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
     /// Tooltip text for the Sync button — explains why it's disabled when applicable. The
     /// button itself shows the playlist count, so the disabled state isn't self-explanatory.
     private var syncHelpText: String {
@@ -218,6 +224,12 @@ private struct FooterView: View {
                 .help(syncHelpText)
 
                 Spacer()
+
+                Text("v\(appVersion)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .help("migs music \(appVersion)")
+                    .padding(.trailing, 4)
 
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .buttonStyle(.borderless)
