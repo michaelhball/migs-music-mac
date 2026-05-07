@@ -19,10 +19,24 @@ struct ContentView: View {
         // Poll the ADB device state while the menu is visible so plugging in a phone after
         // opening the popover updates the UI without a manual refresh. .task is cancelled
         // automatically when the view disappears (popover closes), so polling stops too.
+        //
+        // Adaptive interval: 3s while the state is changing (responsive when the user
+        // plugs/unplugs), backing off up to 30s when the state has been steady. Resets
+        // to 3s on any change. Cuts adb invocations to a small fraction with no
+        // noticeable UX cost — plugging in still registers within a few seconds.
         .task {
+            var lastState: DeviceState? = nil
+            var intervalSeconds: Double = 3
             while !Task.isCancelled {
                 await model.refreshDevice()
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                let current = model.deviceState
+                if current == lastState {
+                    intervalSeconds = min(intervalSeconds * 1.5, 30)
+                } else {
+                    intervalSeconds = 3
+                    lastState = current
+                }
+                try? await Task.sleep(nanoseconds: UInt64(intervalSeconds * 1_000_000_000))
             }
         }
     }
