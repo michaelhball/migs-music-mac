@@ -32,13 +32,20 @@ enum MusicAppService {
         // including tabs, in theory — but in practice playlist names are well-behaved. We
         // split on the FIRST tab so an embedded tab in a name would just become part of the
         // name field rather than corrupting parsing.
+        //
+        // Performance: previous version iterated `every user playlist` and read
+        // `count of tracks of p` + `name of p` per iteration — that's 2 Music.app IPC calls
+        // per playlist, ~5ms each = ~50ms per 50 playlists. Batched property reads
+        // (`name of every user playlist`, `count of tracks of every user playlist`) collapse
+        // to 2 calls total, regardless of playlist count.
         let script = #"""
         tell application "Music"
+            set theNames to name of every user playlist
+            set theCounts to count of tracks of every user playlist
             set out to ""
-            repeat with p in (every user playlist)
-                try
-                    set out to out & ((count of tracks of p) as text) & tab & (name of p as text) & linefeed
-                end try
+            set n to count of theNames
+            repeat with i from 1 to n
+                set out to out & ((item i of theCounts) as text) & tab & (item i of theNames) & linefeed
             end repeat
             return out
         end tell

@@ -115,59 +115,86 @@ PHONE_MUSIC_ROOT="/sdcard/Music"
 PHONE_SYNC_DIR="/sdcard/Android/media/com.migsmusic/sync"
 adb shell "mkdir -p '$PHONE_SYNC_DIR'" > /dev/null
 M3U_OUT="$TMP_DIR/$PLAYLIST_NAME.m3u"
+STAGE_DIR="$TMP_DIR/stage"
+mkdir -p "$STAGE_DIR"
 
 pushed=0
 skipped=0
 missing_local=0
 
-echo "#EXTM3U" > "$M3U_OUT"
+# 4a. Inventory the phone in ONE roundtrip. The previous version did one
+#     `adb shell [ -e PATH ]` per track — for a 10k-library that's ~10–30 minutes of
+#     pure roundtrip overhead. One `find` + a local awk hash is O(N+M) and runs in
+#     under a second for any realistic library size.
+PHONE_FILES="$TMP_DIR/phone_files.txt"
+phone_inventory_start=$(date +%s)
+adb shell "find $PHONE_MUSIC_ROOT -type f 2>/dev/null" > "$PHONE_FILES" || true
+phone_inventory_secs=$(( $(date +%s) - phone_inventory_start ))
+phone_count=$(wc -l < "$PHONE_FILES" | tr -d ' ')
+echo "→ Phone inventory: $phone_count file(s) (${phone_inventory_secs}s)"
 
-# 4. Walk the track list, pushing missing files and assembling the M3U.
-# Read via file descriptor 3 so that `adb shell` / `adb push` calls inside the loop don't
-# consume our stdin (which is the track list file). Without this, the very first adb call
-# would gobble up the rest of the track list and the loop would silently terminate after
-# one iteration.
-while IFS=$'\t' read -r src_path artist title duration <&3; do
-    if [[ ! -f "$src_path" ]]; then
+# 4b. Decide push-or-skip per track using awk for an O(N+M) hash lookup. Awk also
+#     computes the dest_path that would land on the phone — keeps that logic in one
+#     place rather than duplicating it in bash. Output columns:
+#       src \t dest \t rel \t artist \t title \t duration \t status (SKIP|PUSH)
+DECISIONS="$TMP_DIR/decisions.tsv"
+awk -F'\t' \
+    -v phone_file="$PHONE_FILES" \
+    -v music_root="$MAC_MUSIC_ROOT" \
+    -v phone_root="$PHONE_MUSIC_ROOT" \
+    '
+    BEGIN {
+        while ((getline line < phone_file) > 0) on_phone[line] = 1
+        close(phone_file)
+    }
+    {
+        src = $1; artist = $2; title = $3; duration = $4
+        if (music_root != "" && index(src, music_root "/") == 1) {
+            rel = substr(src, length(music_root) + 2)
+        } else {
+            n = split(src, parts, "/"); rel = parts[n]
+        }
+        dest = phone_root "/" rel
+        status = (dest in on_phone) ? "SKIP" : "PUSH"
+        print src "\t" dest "\t" rel "\t" artist "\t" title "\t" duration "\t" status
+    }
+    ' "$TRACK_LIST" > "$DECISIONS"
+
+# 4c. Build the M3U in track order. For PUSH rows, also stage a symlink in $STAGE_DIR
+#     mirroring the desired layout under /sdcard/Music — `adb push` follows symlinks,
+#     so this is zero-copy locally.
+echo "#EXTM3U" > "$M3U_OUT"
+while IFS=$'\t' read -r src dest rel artist title duration status; do
+    if [[ ! -f "$src" ]]; then
         missing_local=$((missing_local + 1))
         continue
     fi
-
-    # Compute the destination path on the phone.
-    if [[ -n "$MAC_MUSIC_ROOT" && "$src_path" == "$MAC_MUSIC_ROOT/"* ]]; then
-        rel_path="${src_path#$MAC_MUSIC_ROOT/}"
-    else
-        # File lives outside Music.app's managed library; just dump it at the root.
-        rel_path=$(basename "$src_path")
-    fi
-    dest_path="$PHONE_MUSIC_ROOT/$rel_path"
-    dest_dir=$(dirname "$dest_path")
-
-    # Append M3U entry first (the on-phone path is what we want the M3U to reference).
     echo "#EXTINF:${duration:-0},$artist - $title" >> "$M3U_OUT"
-    echo "$dest_path" >> "$M3U_OUT"
+    echo "$dest" >> "$M3U_OUT"
+    case "$status" in
+        SKIP)
+            skipped=$((skipped + 1))
+            ;;
+        PUSH)
+            stage_target="$STAGE_DIR/$rel"
+            mkdir -p "$(dirname "$stage_target")"
+            ln -sf "$src" "$stage_target"
+            pushed=$((pushed + 1))
+            echo "  + $rel"
+            ;;
+    esac
+done < "$DECISIONS"
 
-    # Check if the destination already exists. `[ -e ... ]` returns 0 on hit.
-    # Quote dest_path with single-quotes for the remote shell since it may contain
-    # spaces, parens, apostrophes — pass through with bash printf %q for safety.
-    quoted_dest=$(printf '%q' "$dest_path")
-    if adb shell "[ -e $quoted_dest ]" > /dev/null 2>&1; then
-        skipped=$((skipped + 1))
-    else
-        # Make sure the parent dir exists, then push.
-        quoted_dir=$(printf '%q' "$dest_dir")
-        adb shell "mkdir -p $quoted_dir" > /dev/null
-        # `adb push` handles spaces in the destination natively, no extra quoting needed.
-        adb push "$src_path" "$dest_path" > /dev/null
-        # MediaStore picks up files in /sdcard/Music automatically on Android 11+ (FUSE
-        # emulation surfaces the write to MediaProvider). The deprecated
-        # MEDIA_SCANNER_SCAN_FILE broadcast is now a no-op on most devices, so we let the
-        # platform handle indexing. The receiver-side scanDevice() call before import is
-        # what guarantees freshly-pushed files are visible to the matcher.
-        pushed=$((pushed + 1))
-        echo "  + $rel_path"
-    fi
-done 3< "$TRACK_LIST"
+# 4d. Bulk push everything that needs pushing in one adb session. Per-file
+#     `adb push` had ~50-200ms session overhead PER FILE; with hundreds of new
+#     tracks that's all roundtrip time we never had to pay. One push of the staging
+#     tree transfers everything in a single session.
+if (( pushed > 0 )); then
+    push_start=$(date +%s)
+    adb push "$STAGE_DIR/" "$PHONE_MUSIC_ROOT/" > /dev/null
+    push_secs=$(( $(date +%s) - push_start ))
+    echo "→ Pushed $pushed file(s) in ${push_secs}s"
+fi
 
 # 5. Push the M3U last so migs music's auto-detect sees a complete playlist.
 # M3U lands in the app's media dir (not /sdcard/Music) — Android 11+ refuses to grant
