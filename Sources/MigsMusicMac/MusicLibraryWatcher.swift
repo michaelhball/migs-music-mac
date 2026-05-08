@@ -41,16 +41,18 @@ final class MusicLibraryWatcher {
                 | kFSEventStreamCreateFlagFileEvents
                 | kFSEventStreamCreateFlagWatchRoot
         )
-        // 0.25s coalesce window — Music.app's saves are bursty (several writes
-        // for one logical edit). We pre-batch at the FSEvents layer so the
-        // receiver sees one tick per logical edit, not per file write.
+        // 0.1s coalesce window — Music.app's saves are bursty (several writes
+        // for one logical edit). The receiver also debounces, so this is just
+        // the FSEvents-layer pre-batch. Tighter than the default 0.25s because
+        // the dominant latency is Music.app's own flush delay; we don't want
+        // to add to it.
         guard let s = FSEventStreamCreate(
             kCFAllocatorDefault,
             callback,
             &context,
             paths,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.25,
+            0.1,
             flags
         ) else { return nil }
         self.stream = s

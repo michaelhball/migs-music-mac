@@ -114,11 +114,13 @@ final class AppModel: ObservableObject {
 
     /// Debounced refresh trigger. Music.app can fire the change notification many
     /// times in quick succession (e.g. while a multi-track import lands); we
-    /// coalesce to one refresh per ~250ms quiet window.
+    /// coalesce to one refresh per quiet window. Kept short (100ms) because
+    /// FSEvents already pre-batches at 100ms, so this is a second layer rather
+    /// than the main coalescer.
     private func scheduleLiveRefresh() {
         liveRefreshTask?.cancel()
         liveRefreshTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: 100_000_000)
             if Task.isCancelled { return }
             await self?.refreshPlaylists()
         }
