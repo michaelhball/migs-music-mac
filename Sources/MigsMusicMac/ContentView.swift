@@ -256,7 +256,7 @@ private struct FooterView: View {
                 let succeeded = model.lastResults.filter { $0.success }.count
                 let failed = model.lastResults.count - succeeded
                 Text(failed == 0
-                    ? "✓ Synced \(succeeded) playlist\(succeeded == 1 ? "" : "s")"
+                    ? "Synced \(succeeded) playlist\(succeeded == 1 ? "" : "s")"
                     : "Synced \(succeeded), \(failed) failed")
                     .font(.caption)
                     .foregroundColor(failed == 0 ? .secondary : .red)
