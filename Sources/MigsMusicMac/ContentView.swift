@@ -131,38 +131,20 @@ private struct PlaylistListView: View {
                 .foregroundColor(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                // Search + manual reload row. Search field only when there are enough
-                // playlists for it to be useful (below ~10 you scan visually faster);
-                // the reload button is always shown so the user has an explicit way to
-                // pull in edits made in Music.app since the last refresh.
-                HStack(spacing: 6) {
-                    if model.playlists.count > 10 {
-                        HStack {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundColor(.secondary)
-                            TextField("Search playlists", text: $model.searchQuery)
-                                .textFieldStyle(.plain)
-                                .font(.caption)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 4)
-                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                    } else {
-                        Spacer()
-                    }
-                    // Pull edits from Music.app. With ITLibrary live notifications wired
-                    // up (AppModel subscribes to ITLibraryDidChangeNotification), the list
-                    // usually refreshes itself within ~300ms of a Music.app edit — this
-                    // button is the manual fallback. Label explicitly says "Music.app" so
-                    // it's not confused with the "Check phone" button or the Sync action.
-                    Button {
-                        Task { await model.refreshPlaylists() }
-                    } label: {
-                        Label("Music", systemImage: "arrow.clockwise")
+                // Search field only when there are enough playlists for it to be useful
+                // (below ~10 you scan visually faster). No manual reload button — the
+                // FSEvents watcher refreshes the list within ~200ms of any Music.app edit.
+                if model.playlists.count > 10 {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.secondary)
+                        TextField("Search playlists", text: $model.searchQuery)
+                            .textFieldStyle(.plain)
                             .font(.caption)
                     }
-                    .buttonStyle(.borderless)
-                    .help("Reload playlists from Music. Music edits should refresh automatically; this is the manual fallback.")
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
                 }
 
                 let visible = model.visiblePlaylists
