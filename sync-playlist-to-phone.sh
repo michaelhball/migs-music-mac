@@ -19,6 +19,22 @@
 
 set -euo pipefail
 
+# Optional millisecond-resolution profiling. Set MIGS_PROFILE=1 to print a
+# "[+Nms phase]" line for every phase boundary. Uses gdate when available
+# (Homebrew coreutils), falls back to python3. Cheap when off — one var read.
+if [[ -n "${MIGS_PROFILE:-}" ]]; then
+    if command -v gdate > /dev/null 2>&1; then
+        _now_ms() { gdate +%s%3N; }
+    else
+        _now_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
+    fi
+    _T_START=$(_now_ms)
+    T() { echo "  [+$(( $(_now_ms) - _T_START ))ms] $*" >&2; }
+else
+    T() { :; }
+fi
+T "start"
+
 BROADCAST_ON_DONE=true
 ARGS=()
 for arg in "$@"; do
@@ -38,6 +54,7 @@ if ! adb get-state > /dev/null 2>&1; then
     echo "✗ No ADB device. Is the phone plugged in and authorised?" >&2
     exit 1
 fi
+T "adb get-state ok"
 
 TMP_DIR=$(mktemp -d -t migs-sync-XXXX)
 trap "rm -rf $TMP_DIR" EXIT
@@ -105,17 +122,21 @@ done
 
 PHONE_MUSIC_ROOT="/sdcard/Music"
 PHONE_SYNC_DIR="/sdcard/Android/media/com.migsmusic/sync"
-adb shell "mkdir -p '$PHONE_SYNC_DIR'" > /dev/null
 STAGE_DIR="$TMP_DIR/stage"
 mkdir -p "$STAGE_DIR"
 
-# 4. Inventory the phone in ONE roundtrip — shared across every playlist.
+# 4. Kick off the phone inventory in the background — it's a single adb roundtrip
+# but ~1–2s over USB for libraries with thousands of files. We `wait` on it just
+# before the awk decision step, by which point migs-tracks (~200ms) has already
+# run, so the inventory's wall-clock cost is hidden behind the playlist dump.
+# The same adb-shell call also creates the sync dir, saving an extra roundtrip
+# (mkdir -p is a no-op if it already exists).
 PHONE_FILES="$TMP_DIR/phone_files.tsv"
-phone_inventory_start=$(date +%s)
-adb shell "find $PHONE_MUSIC_ROOT -type f -exec stat -c '%s	%n' {} + 2>/dev/null" > "$PHONE_FILES" || true
-phone_inventory_secs=$(( $(date +%s) - phone_inventory_start ))
-phone_count=$(wc -l < "$PHONE_FILES" | tr -d ' ')
-echo "→ Phone inventory: $phone_count file(s) (${phone_inventory_secs}s)"
+(
+    adb shell "mkdir -p '$PHONE_SYNC_DIR' && find $PHONE_MUSIC_ROOT -type f -exec stat -c '%s	%n' {} + 2>/dev/null" > "$PHONE_FILES" || true
+) &
+PHONE_INVENTORY_PID=$!
+T "phone inventory started (bg pid=$PHONE_INVENTORY_PID)"
 
 # Aggregate counters across all playlists.
 TOTAL_PUSHED=0
@@ -132,6 +153,7 @@ M3U_PATHS=()
 for PLAYLIST_NAME in "${ARGS[@]}"; do
     track_list="$TMP_DIR/${PLAYLIST_NAME}.tracks.tsv"
     dump_playlist "$PLAYLIST_NAME" "$track_list"
+    T "dumped \"$PLAYLIST_NAME\""
 
     if [[ ! -s "$track_list" ]]; then
         echo "⚠ \"$PLAYLIST_NAME\": no playable tracks (empty or all streaming-only)." >&2
@@ -145,6 +167,7 @@ for PLAYLIST_NAME in "${ARGS[@]}"; do
     mac_sizes="$TMP_DIR/${PLAYLIST_NAME}.sizes.tsv"
     LC_ALL=C cut -f1 "$track_list" | LC_ALL=C tr '\n' '\0' | \
         xargs -0 -n 200 stat -f '%z	%N' 2>/dev/null > "$mac_sizes" || true
+    T "  mac stat ($(wc -l < "$track_list" | tr -d ' ') tracks)"
 
     # 4b. Join sizes onto the track list.
     sized="$TMP_DIR/${PLAYLIST_NAME}.sized.tsv"
@@ -160,6 +183,15 @@ for PLAYLIST_NAME in "${ARGS[@]}"; do
     ' "$track_list" > "$sized"
 
     # 4c. Awk decides PUSH/SKIP per track. Output: src \t m3u_dest \t rel \t artist \t title \t duration \t status
+    # Join the background phone-inventory here — it's been running concurrently
+    # with the playlist dumps and mac-side stat. `wait` is a no-op if it's done.
+    if [[ -n "${PHONE_INVENTORY_PID:-}" ]]; then
+        wait "$PHONE_INVENTORY_PID" || true
+        unset PHONE_INVENTORY_PID
+        phone_count=$(wc -l < "$PHONE_FILES" | tr -d ' ')
+        echo "→ Phone inventory: $phone_count file(s)"
+        T "phone inventory joined ($phone_count files)"
+    fi
     decisions="$TMP_DIR/${PLAYLIST_NAME}.decisions.tsv"
     awk -F'\t' \
         -v phone_file="$PHONE_FILES" \
@@ -228,6 +260,7 @@ for PLAYLIST_NAME in "${ARGS[@]}"; do
     TOTAL_SKIPPED=$((TOTAL_SKIPPED + pl_skipped))
     TOTAL_MISSING=$((TOTAL_MISSING + pl_missing))
     echo "  → push=$pl_pushed skip=$pl_skipped missing=$pl_missing"
+    T "  decided + staged"
 done
 
 # 5. ONE tar-stream to the phone with every staged file from every playlist.
@@ -237,6 +270,7 @@ if (( TOTAL_PUSHED > 0 )); then
         adb shell "cd '$PHONE_MUSIC_ROOT' && tar -xf -"
     push_secs=$(( $(date +%s) - push_start ))
     echo "→ Pushed $TOTAL_PUSHED file(s) in ${push_secs}s"
+    T "tar-stream push ($TOTAL_PUSHED files)"
 fi
 
 # 6. Push every M3U.
@@ -244,14 +278,18 @@ for m3u in "${M3U_PATHS[@]}"; do
     base=$(basename "$m3u")
     adb push "$m3u" "$PHONE_SYNC_DIR/$base" > /dev/null
 done
+T "pushed ${#M3U_PATHS[@]} m3u(s)"
 
 # 7. Trigger migs music's auto-import (once, after all M3Us land).
 imported_on_phone=true
 if [[ "$BROADCAST_ON_DONE" == true ]]; then
     adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20" > /dev/null 2>&1 || true
+    T "broadcast"
 
     imported_on_phone=false
-    last_m3u_dest="$PHONE_SYNC_DIR/$(basename "${M3U_PATHS[-1]}")"
+    # macOS ships bash 3.2 — no negative array indices. Compute the last index manually.
+    last_idx=$(( ${#M3U_PATHS[@]} - 1 ))
+    last_m3u_dest="$PHONE_SYNC_DIR/$(basename "${M3U_PATHS[$last_idx]}")"
     quoted_m3u=$(printf '%q' "$last_m3u_dest")
     for _ in $(seq 1 10); do
         if ! adb shell "[ -e $quoted_m3u ]" > /dev/null 2>&1; then
@@ -259,7 +297,9 @@ if [[ "$BROADCAST_ON_DONE" == true ]]; then
         fi
         sleep 0.5
     done
+    T "wait for import (imported=$imported_on_phone)"
 fi
+T "done"
 
 echo ""
 if [[ "$BROADCAST_ON_DONE" == false ]]; then
