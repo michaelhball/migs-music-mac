@@ -280,6 +280,15 @@ for m3u in "${M3U_PATHS[@]}"; do
 done
 T "pushed ${#M3U_PATHS[@]} m3u(s)"
 
+# 6a. Sidecar with the audio-pushed count. Lets the phone-side import skip the
+# expensive MediaStore→Room rescan on no-op resyncs (audioPushed=0). Anything
+# the receiver doesn't recognise is ignored, so older Android builds just see
+# an unfamiliar file and carry on.
+stats_file="$TMP_DIR/.migs-sync-stats"
+echo "audioPushed=$TOTAL_PUSHED" > "$stats_file"
+adb push "$stats_file" "$PHONE_SYNC_DIR/.migs-sync-stats" > /dev/null
+T "pushed sync-stats sidecar"
+
 # 7. Trigger migs music's auto-import (once, after all M3Us land).
 imported_on_phone=true
 if [[ "$BROADCAST_ON_DONE" == true ]]; then
