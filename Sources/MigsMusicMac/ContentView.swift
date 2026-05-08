@@ -83,13 +83,14 @@ private struct HeaderView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            // Re-check the connected ADB device. Live-polling already does this every few
+            // Re-check the connected ADB device. Polling already does this every few
             // seconds while the popover is open; this button is the manual escape hatch
-            // for "I just plugged in / accepted the auth dialog and want it now".
+            // for "I just plugged in / accepted the auth dialog and want it now". Label
+            // explicitly says "phone" so it's not confused with the playlist reload icon.
             Button {
                 Task { await model.refreshDevice() }
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Label("Check phone", systemImage: "arrow.clockwise")
                     .font(.caption)
             }
             .buttonStyle(.borderless)
@@ -157,15 +158,19 @@ private struct PlaylistListView: View {
                     } else {
                         Spacer()
                     }
+                    // Pull edits from Music.app. With ITLibrary live notifications wired
+                    // up (AppModel subscribes to ITLibraryDidChangeNotification), the list
+                    // usually refreshes itself within ~300ms of a Music.app edit — this
+                    // button is the manual fallback. Label explicitly says "Music.app" so
+                    // it's not confused with the "Check phone" button or the Sync action.
                     Button {
                         Task { await model.refreshPlaylists() }
                     } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .imageScale(.small)
-                            .foregroundColor(.secondary)
+                        Label("Music.app", systemImage: "arrow.clockwise")
+                            .font(.caption)
                     }
                     .buttonStyle(.borderless)
-                    .help("Reload playlists from Music.app — picks up edits made since the last refresh.")
+                    .help("Reload playlists from Music.app. Music.app edits should refresh automatically; this is the manual fallback.")
                 }
 
                 let visible = model.visiblePlaylists
@@ -218,7 +223,9 @@ private struct PlaylistRow: View {
         let state = model.syncState(for: playlist)
         switch state {
         case .synced:
-            Image(systemName: "checkmark.circle.fill")
+            // Solid green dot to mirror the orange "pending" dot — same shape, different
+            // colour, glanceable status. Avoids the checkmark-symbol baggage.
+            Image(systemName: "circle.fill")
                 .imageScale(.small)
                 .foregroundColor(.green)
                 .help("Synced — phone matches Music.app.")
@@ -301,9 +308,13 @@ private struct FooterView: View {
                     Task { await model.syncSelected() }
                 } label: {
                     if model.syncing {
-                        Text("Syncing…")
+                        Label("Syncing…", systemImage: "iphone.and.arrow.forward")
                     } else {
-                        Text("Sync \(model.selected.count) playlist\(model.selected.count == 1 ? "" : "s")")
+                        let n = model.selected.count
+                        Label(
+                            "Sync \(n) to phone",
+                            systemImage: "iphone.and.arrow.forward"
+                        )
                     }
                 }
                 .buttonStyle(.borderedProminent)
