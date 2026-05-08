@@ -83,22 +83,18 @@ private struct HeaderView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            // Manual refresh: re-check the connected ADB device AND re-read playlists from
-            // Music.app. Both are cheap. The label is rendered inline next to the icon
-            // because .help() tooltips don't reliably appear inside MenuBarExtra(.window).
+            // Re-check the connected ADB device. Live-polling already does this every few
+            // seconds while the popover is open; this button is the manual escape hatch
+            // for "I just plugged in / accepted the auth dialog and want it now".
             Button {
-                Task {
-                    async let device: () = model.refreshDevice()
-                    async let playlists: () = model.refreshPlaylists()
-                    _ = await (device, playlists)
-                }
+                Task { await model.refreshDevice() }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
                     .font(.caption)
             }
             .buttonStyle(.borderless)
             .keyboardShortcut("r", modifiers: .command)
-            .help("Re-check phone connection and reload playlists (⌘R)")
+            .help("Re-check phone connection (⌘R)")
         }
     }
 
@@ -142,19 +138,34 @@ private struct PlaylistListView: View {
                 .foregroundColor(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                // Show the search field only when there are enough playlists for it to be
-                // useful. Below ~10 you can scan visually faster than typing.
-                if model.playlists.count > 10 {
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.secondary)
-                        TextField("Search playlists", text: $model.searchQuery)
-                            .textFieldStyle(.plain)
-                            .font(.caption)
+                // Search + manual reload row. Search field only when there are enough
+                // playlists for it to be useful (below ~10 you scan visually faster);
+                // the reload button is always shown so the user has an explicit way to
+                // pull in edits made in Music.app since the last refresh.
+                HStack(spacing: 6) {
+                    if model.playlists.count > 10 {
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(.secondary)
+                            TextField("Search playlists", text: $model.searchQuery)
+                                .textFieldStyle(.plain)
+                                .font(.caption)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    } else {
+                        Spacer()
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    Button {
+                        Task { await model.refreshPlaylists() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .imageScale(.small)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Reload playlists from Music.app — picks up edits made since the last refresh.")
                 }
 
                 let visible = model.visiblePlaylists
