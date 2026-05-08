@@ -104,6 +104,12 @@ for sz in 10 50 200; do
     bench "sync warm — no-op"               ./sync-playlist-to-phone.sh --no-broadcast "$PL"
 done
 
+# ---- Multi-playlist mode: ONE invocation, all 3 at once ----
+echo ""
+echo "=== Multi-playlist sync (all 3 in one pass) ==="
+bench "sync warm — 3 playlists, shared inventory" \
+    ./sync-playlist-to-phone.sh --no-broadcast migs-test-10 migs-test-50 migs-test-200
+
 # ---- Cleanup ----
 echo ""
 echo "→ Deleting test playlists..."
