@@ -33,26 +33,39 @@ enum SyncOrchestrator {
             }
         }
 
-        // Push the manifest BEFORE running per-playlist syncs so the deleteOrphans flag is
+        // Push the manifest BEFORE running the sync so the deleteOrphans flag is
         // available to the receiver during each per-playlist replace (per-song orphan
         // cleanup). Pushing it after-the-fact would only catch whole-playlist removals.
         await pushManifest(playlistNames: playlistNames, deleteOrphanedAudio: deleteOrphanedAudio)
 
-        var results: [SyncResult] = []
-        for (index, name) in playlistNames.enumerated() {
-            await MainActor.run { progress(index, playlistNames.count, name) }
-            // --no-broadcast: per-playlist runs just push files; the orchestrator broadcasts
-            // ONCE at the end so the receiver does all imports + orphan cleanup + prune
-            // atomically. Per-playlist broadcasting would race with the manifest read.
-            let result = await runSyncScript(scriptURL: scriptURL, playlistName: name, noBroadcast: true)
-            results.append(result)
-        }
+        // Single bash invocation handles every playlist in one pass: ONE phone
+        // inventory, shared local staging tree, ONE tar-stream push for all new
+        // audio. Previous version called the script N times, paying N×phone-inventory
+        // and N×tar-push overhead — a meaningful drag for users with 50+ playlists.
+        await MainActor.run { progress(0, playlistNames.count, playlistNames.first ?? "") }
+        let result = await runSyncScript(
+            scriptURL: scriptURL,
+            playlistNames: playlistNames,
+            noBroadcast: true
+        )
 
         // Single AUTO_IMPORT broadcast after all syncs land. Receiver reads manifest,
         // imports any pending m3u files (with per-song orphan cleanup), prunes whole
         // playlists not in the manifest, deletes the manifest. One atomic pass.
         await broadcastAutoImport()
-        return results
+
+        // Surface a per-playlist result for the UI's "Synced N / failed M" summary.
+        // The bash script reports aggregate counts; we don't track per-playlist
+        // success granularly anymore (a single failure on one playlist would still
+        // produce stage entries for the others). If the bash script exits non-zero
+        // we mark all playlists as failed; otherwise all succeed.
+        return playlistNames.map { name in
+            SyncResult(
+                playlistName: name,
+                success: result.success,
+                output: result.output
+            )
+        }
     }
 
     private static func pushManifest(
@@ -114,12 +127,12 @@ enum SyncOrchestrator {
 
     private static func runSyncScript(
         scriptURL: URL,
-        playlistName: String,
+        playlistNames: [String],
         noBroadcast: Bool = false
     ) async -> SyncResult {
         var args = [scriptURL.path]
         if noBroadcast { args.append("--no-broadcast") }
-        args.append(playlistName)
+        args.append(contentsOf: playlistNames)
 
         // Inherit a sane PATH so `adb` / `osascript` resolve the same way they would
         // from a Terminal session. The bash script also has explicit candidate paths
@@ -145,7 +158,7 @@ enum SyncOrchestrator {
             mergeStreams: true
         )
         return SyncResult(
-            playlistName: playlistName,
+            playlistName: playlistNames.joined(separator: ", "),
             success: result.ok,
             output: result.stdout
         )

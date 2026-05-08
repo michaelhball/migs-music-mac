@@ -1,28 +1,21 @@
 #!/usr/bin/env bash
 #
-# sync-playlist-to-phone.sh — push a Music.app playlist + its audio files to a phone.
+# sync-playlist-to-phone.sh — push one or more Music.app playlists + their audio
+# files to a phone. Optimised for huge libraries: a single phone-inventory call,
+# shared file-staging across playlists, and one tar-stream for the whole batch.
 #
 # Usage:
-#   scripts/sync-playlist-to-phone.sh "My Playlist"
+#   sync-playlist-to-phone.sh [--no-broadcast] "Playlist1" ["Playlist2" ...]
 #
 # What it does:
-#   1. Asks Music.app for every track in the named playlist (via AppleScript).
-#   2. Mirrors Music.app's Artist/Album/Track layout under /sdcard/Music/ on the phone,
-#      preserving relative paths from ~/Music/Music/Media.localized/Music/ (or
-#      $HOME/Music/Music/Media/Music/ depending on your macOS version).
-#   3. For each track, checks whether the destination already exists on the phone —
-#      pushes only the missing ones (so re-syncing a playlist that overlaps with
-#      already-transferred music is effectively free).
-#   4. Pushes the M3U last, to /sdcard/Music/<playlist>.m3u, where migs music's
-#      auto-detect picks it up.
-#
-# Requirements:
-#   - macOS with Music.app
-#   - Phone connected via USB with ADB authorised (`adb devices` should show one device)
-#   - First run will trigger a macOS prompt to allow Terminal to control Music.app — say yes.
-#
-# Streaming-only Apple Music tracks (no local file) are silently skipped: they wouldn't
-# be playable on the phone anyway since the audio file isn't on disk.
+#   1. Reads each playlist's track list via the migs-tracks ITLibrary CLI helper
+#      (or AppleScript fallback).
+#   2. Inventories /sdcard/Music ONCE and dedups by (size, basename) so songs
+#      already on the phone — even at a different path — aren't re-pushed.
+#   3. Stages every missing track (across all playlists) into a single local
+#      tree, then streams the whole tree to the phone via one `adb shell tar`.
+#   4. Pushes one M3U per playlist into /sdcard/Android/media/com.migsmusic/sync/.
+#   5. Broadcasts AUTO_IMPORT once at the end (unless --no-broadcast).
 
 set -euo pipefail
 
@@ -30,41 +23,28 @@ BROADCAST_ON_DONE=true
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
-        --no-broadcast)
-            BROADCAST_ON_DONE=false
-            ;;
-        *)
-            ARGS+=("$arg")
-            ;;
+        --no-broadcast) BROADCAST_ON_DONE=false ;;
+        *) ARGS+=("$arg") ;;
     esac
 done
 
-PLAYLIST_NAME="${ARGS[0]:-}"
-if [[ -z "$PLAYLIST_NAME" ]]; then
-    echo "Usage: $0 [--no-broadcast] \"<playlist name>\"" >&2
+if (( ${#ARGS[@]} == 0 )); then
+    echo "Usage: $0 [--no-broadcast] \"<playlist>\" [\"<playlist>\" ...]" >&2
     exit 1
 fi
 
 # 1. Verify ADB device.
 if ! adb get-state > /dev/null 2>&1; then
-    echo "✗ No ADB device. Is the phone plugged in and authorised? (Try: adb devices)" >&2
+    echo "✗ No ADB device. Is the phone plugged in and authorised?" >&2
     exit 1
 fi
 
-# 2. Dump the playlist's track list as TSV. We prefer `migs-tracks` (a Swift
-#    CLI helper that uses iTunesLibrary.framework) — same shape, ~5x faster than
-#    osascript, and the speedup actually scales: ITLibrary is constant cost
-#    regardless of playlist size, while AppleScript spends per-track AppleEvent
-#    IPC on the order of ms. For 1000-track playlists, AppleScript takes ~5–10s;
-#    migs-tracks stays at ~250ms.
-#
-# Falls back to AppleScript if the helper isn't available (e.g., running from a
-# pre-bundled checkout without `swift build`). Same TSV shape either way.
 TMP_DIR=$(mktemp -d -t migs-sync-XXXX)
 trap "rm -rf $TMP_DIR" EXIT
-TRACK_LIST="$TMP_DIR/tracks.tsv"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 2. Locate migs-tracks (preferred) or fall back to AppleScript.
 MIGS_TRACKS=""
 for candidate in \
     "$SCRIPT_DIR/migs-tracks" \
@@ -76,11 +56,12 @@ for candidate in \
     fi
 done
 
-if [[ -n "$MIGS_TRACKS" ]]; then
-    "$MIGS_TRACKS" "$PLAYLIST_NAME" --out "$TRACK_LIST" || true
-else
-    # AppleScript fallback. Same output shape: <posix path>\t<artist>\t<title>\t<duration>
-    osascript - "$PLAYLIST_NAME" "$TRACK_LIST" <<'APPLESCRIPT'
+dump_playlist() {
+    local name="$1" out="$2"
+    if [[ -n "$MIGS_TRACKS" ]]; then
+        "$MIGS_TRACKS" "$name" --out "$out" || true
+    else
+        osascript - "$name" "$out" <<'APPLESCRIPT'
 on run argv
     set playlistName to item 1 of argv
     set outPath to item 2 of argv
@@ -108,19 +89,10 @@ on run argv
     end tell
 end run
 APPLESCRIPT
-fi
+    fi
+}
 
-if [[ ! -s "$TRACK_LIST" ]]; then
-    echo "✗ Playlist \"$PLAYLIST_NAME\" produced no playable tracks (empty playlist, or all tracks are streaming-only)." >&2
-    exit 1
-fi
-
-TRACK_COUNT=$(wc -l < "$TRACK_LIST" | tr -d ' ')
-echo "→ \"$PLAYLIST_NAME\": $TRACK_COUNT tracks with local files."
-
-# 3. Discover the Music.app media root so we can compute clean relative paths.
-#    Modern macOS:   ~/Music/Music/Media.localized/Music/
-#    Some installs:  ~/Music/Music/Media/Music/
+# 3. Discover the Music.app media root for clean relative paths.
 MAC_MUSIC_ROOT=""
 for candidate in \
     "$HOME/Music/Music/Media.localized/Music" \
@@ -134,187 +106,156 @@ done
 PHONE_MUSIC_ROOT="/sdcard/Music"
 PHONE_SYNC_DIR="/sdcard/Android/media/com.migsmusic/sync"
 adb shell "mkdir -p '$PHONE_SYNC_DIR'" > /dev/null
-M3U_OUT="$TMP_DIR/$PLAYLIST_NAME.m3u"
 STAGE_DIR="$TMP_DIR/stage"
 mkdir -p "$STAGE_DIR"
 
-pushed=0
-skipped=0
-missing_local=0
-
-# 4a. Inventory the phone in ONE roundtrip. The previous version did one
-#     `adb shell [ -e PATH ]` per track — for a 10k-library that's ~10–30 minutes of
-#     pure roundtrip overhead. One `find` + a local awk hash is O(N+M) and runs in
-#     under a second for any realistic library size.
-#
-#     We capture filesize alongside path so the dedup step below can match by
-#     (size, basename) instead of full-path equality. That handles the "song
-#     transferred via OnePlus Share lives at a different path than what we'd
-#     compute" case — same filename + same byte count = treat it as already on
-#     phone, point the M3U at the existing path, don't re-push.
+# 4. Inventory the phone in ONE roundtrip — shared across every playlist.
 PHONE_FILES="$TMP_DIR/phone_files.tsv"
 phone_inventory_start=$(date +%s)
-# `stat` output on Android: `<size> <path>` — toybox/busybox supports `-c '%s %n'`.
 adb shell "find $PHONE_MUSIC_ROOT -type f -exec stat -c '%s	%n' {} + 2>/dev/null" > "$PHONE_FILES" || true
 phone_inventory_secs=$(( $(date +%s) - phone_inventory_start ))
 phone_count=$(wc -l < "$PHONE_FILES" | tr -d ' ')
 echo "→ Phone inventory: $phone_count file(s) (${phone_inventory_secs}s)"
 
-# 4b. Decide push-or-skip per track. Awk builds two indices over the phone
-#     inventory: full-path (exact match) and (size, basename) (same-content match
-#     under a different layout). For each track:
-#       - If exact dest path exists → SKIP (use computed dest in M3U)
-#       - Else if (size, basename) matches → SKIP, M3U points at the existing path
-#       - Else → PUSH (stage + tar-stream)
-#     Output columns:
-#       src \t m3u_dest \t rel \t artist \t title \t duration \t status (SKIP|PUSH)
-# Pre-compute file sizes in ONE batched stat call (the per-track loop version
-# of this was 12s for 126 tracks because each iteration spawned a subprocess).
-# `stat -f '%z\t%N' f1 f2 ...` handles many paths in a single invocation; `xargs
-# -0 -n 200` chunks 200-at-a-time to stay under arg-length limits while keeping
-# the number of subprocesses tiny.
-#
-# LC_ALL=C is necessary because BSD cut on macOS bails with "illegal byte
-# sequence" on UTF-8 multi-byte chars (umlauts, accents) when the locale is
-# UTF-8 and a track path contains them. Tab is single-byte, so byte-oriented
-# cut Just Works.
-MAC_SIZES="$TMP_DIR/mac_sizes.tsv"
-LC_ALL=C cut -f1 "$TRACK_LIST" | LC_ALL=C tr '\n' '\0' | \
-    xargs -0 -n 200 stat -f '%z	%N' 2>/dev/null > "$MAC_SIZES" || true
+# Aggregate counters across all playlists.
+TOTAL_PUSHED=0
+TOTAL_SKIPPED=0
+TOTAL_MISSING=0
+M3U_PATHS=()
 
-# Join sizes onto the track list. Awk reads sizes file into a hash keyed by path.
-TRACK_LIST_SIZED="$TMP_DIR/tracks_with_size.tsv"
-awk -F'\t' -v sizes_file="$MAC_SIZES" '
-    BEGIN {
-        while ((getline line < sizes_file) > 0) {
-            tab = index(line, "\t")
-            if (tab == 0) continue
-            sizes[substr(line, tab + 1)] = substr(line, 1, tab - 1)
-        }
-        close(sizes_file)
-    }
-    { print $0 "\t" (sizes[$1] != "" ? sizes[$1] : "") }
-' "$TRACK_LIST" > "$TRACK_LIST_SIZED"
+# When multiple playlists reference the same audio file, we want to stage it
+# once. The staging tree itself is the dedup index — we check if the target
+# symlink already exists before linking. Filesystem stat is O(1); the previous
+# grep-based dedup was O(N*M) per playlist and would have blown up on huge
+# libraries.
 
-DECISIONS="$TMP_DIR/decisions.tsv"
-awk -F'\t' \
-    -v phone_file="$PHONE_FILES" \
-    -v music_root="$MAC_MUSIC_ROOT" \
-    -v phone_root="$PHONE_MUSIC_ROOT" \
-    '
-    BEGIN {
-        while ((getline line < phone_file) > 0) {
-            # phone_file format: "<size>\t<path>"
-            tab = index(line, "\t")
-            if (tab == 0) continue
-            size = substr(line, 1, tab - 1)
-            path = substr(line, tab + 1)
-            on_phone_path[path] = 1
-            n = split(path, parts, "/"); base = parts[n]
-            sizebase[size "|" base] = path
-        }
-        close(phone_file)
-    }
-    {
-        # Input columns: src \t artist \t title \t duration \t size
-        src = $1; artist = $2; title = $3; duration = $4; sz = $5
-        if (music_root != "" && index(src, music_root "/") == 1) {
-            rel = substr(src, length(music_root) + 2)
-        } else {
-            n = split(src, parts, "/"); rel = parts[n]
-        }
-        computed_dest = phone_root "/" rel
-        status = "PUSH"
-        m3u_dest = computed_dest
-        if (computed_dest in on_phone_path) {
-            status = "SKIP"
-        } else {
-            n2 = split(rel, rparts, "/"); basename = rparts[n2]
-            if (sz != "" && (sz "|" basename) in sizebase) {
-                status = "SKIP"
-                m3u_dest = sizebase[sz "|" basename]
-            }
-        }
-        print src "\t" m3u_dest "\t" rel "\t" artist "\t" title "\t" duration "\t" status
-    }
-    ' "$TRACK_LIST_SIZED" > "$DECISIONS"
+for PLAYLIST_NAME in "${ARGS[@]}"; do
+    track_list="$TMP_DIR/${PLAYLIST_NAME}.tracks.tsv"
+    dump_playlist "$PLAYLIST_NAME" "$track_list"
 
-# 4c. Build the M3U in track order. For PUSH rows, also stage a symlink in $STAGE_DIR
-#     mirroring the desired layout under /sdcard/Music — `adb push` follows symlinks,
-#     so this is zero-copy locally.
-echo "#EXTM3U" > "$M3U_OUT"
-while IFS=$'\t' read -r src dest rel artist title duration status; do
-    if [[ ! -f "$src" ]]; then
-        missing_local=$((missing_local + 1))
+    if [[ ! -s "$track_list" ]]; then
+        echo "⚠ \"$PLAYLIST_NAME\": no playable tracks (empty or all streaming-only)." >&2
         continue
     fi
-    echo "#EXTINF:${duration:-0},$artist - $title" >> "$M3U_OUT"
-    echo "$dest" >> "$M3U_OUT"
-    case "$status" in
-        SKIP)
-            skipped=$((skipped + 1))
-            ;;
-        PUSH)
-            stage_target="$STAGE_DIR/$rel"
-            mkdir -p "$(dirname "$stage_target")"
-            ln -sf "$src" "$stage_target"
-            pushed=$((pushed + 1))
-            echo "  + $rel"
-            ;;
-    esac
-done < "$DECISIONS"
+    track_count=$(wc -l < "$track_list" | tr -d ' ')
+    echo "→ \"$PLAYLIST_NAME\": $track_count tracks with local files."
 
-# 4d. Bulk push via a single tar-stream over `adb shell`. Earlier attempts with
-#     `adb push stage_dir/ /sdcard/Music/` had two problems: (1) it doesn't
-#     dereference symlinks (it tries to create remote symlinks, which fails on
-#     /sdcard's FUSE-emulated FS), and (2) `push localdir/ remotedir/` puts
-#     localdir AS A SUBDIRECTORY of remotedir (`/sdcard/Music/stage/...`).
-#
-#     Tar handles both correctly: --dereference follows the symlinks at archive
-#     time, and `tar -xf -` at the remote extracts in CWD, no path-mangling. One
-#     adb session for the whole batch — replaces N per-file pushes that paid
-#     ~50-200ms session overhead each.
-if (( pushed > 0 )); then
+    # 4a. Pre-compute file sizes in ONE batched stat call. LC_ALL=C so BSD cut/tr
+    # don't choke on UTF-8 multi-byte chars in track paths.
+    mac_sizes="$TMP_DIR/${PLAYLIST_NAME}.sizes.tsv"
+    LC_ALL=C cut -f1 "$track_list" | LC_ALL=C tr '\n' '\0' | \
+        xargs -0 -n 200 stat -f '%z	%N' 2>/dev/null > "$mac_sizes" || true
+
+    # 4b. Join sizes onto the track list.
+    sized="$TMP_DIR/${PLAYLIST_NAME}.sized.tsv"
+    awk -F'\t' -v sizes_file="$mac_sizes" '
+        BEGIN {
+            while ((getline line < sizes_file) > 0) {
+                tab = index(line, "\t"); if (tab == 0) continue
+                sizes[substr(line, tab + 1)] = substr(line, 1, tab - 1)
+            }
+            close(sizes_file)
+        }
+        { print $0 "\t" (sizes[$1] != "" ? sizes[$1] : "") }
+    ' "$track_list" > "$sized"
+
+    # 4c. Awk decides PUSH/SKIP per track. Output: src \t m3u_dest \t rel \t artist \t title \t duration \t status
+    decisions="$TMP_DIR/${PLAYLIST_NAME}.decisions.tsv"
+    awk -F'\t' \
+        -v phone_file="$PHONE_FILES" \
+        -v music_root="$MAC_MUSIC_ROOT" \
+        -v phone_root="$PHONE_MUSIC_ROOT" \
+        '
+        BEGIN {
+            while ((getline line < phone_file) > 0) {
+                tab = index(line, "\t"); if (tab == 0) continue
+                size = substr(line, 1, tab - 1)
+                path = substr(line, tab + 1)
+                on_phone_path[path] = 1
+                n = split(path, parts, "/"); base = parts[n]
+                sizebase[size "|" base] = path
+            }
+            close(phone_file)
+        }
+        {
+            src = $1; artist = $2; title = $3; duration = $4; sz = $5
+            if (music_root != "" && index(src, music_root "/") == 1) {
+                rel = substr(src, length(music_root) + 2)
+            } else {
+                n = split(src, parts, "/"); rel = parts[n]
+            }
+            computed_dest = phone_root "/" rel
+            status = "PUSH"
+            m3u_dest = computed_dest
+            if (computed_dest in on_phone_path) {
+                status = "SKIP"
+            } else {
+                n2 = split(rel, rparts, "/"); basename = rparts[n2]
+                if (sz != "" && (sz "|" basename) in sizebase) {
+                    status = "SKIP"
+                    m3u_dest = sizebase[sz "|" basename]
+                }
+            }
+            print src "\t" m3u_dest "\t" rel "\t" artist "\t" title "\t" duration "\t" status
+        }
+    ' "$sized" > "$decisions"
+
+    # 4d. Build the M3U + stage missing files (deduped across playlists).
+    m3u_out="$TMP_DIR/${PLAYLIST_NAME}.m3u"
+    echo "#EXTM3U" > "$m3u_out"
+    pl_pushed=0; pl_skipped=0; pl_missing=0
+    while IFS=$'\t' read -r src m3u_dest rel artist title duration status; do
+        if [[ ! -f "$src" ]]; then
+            pl_missing=$((pl_missing + 1)); continue
+        fi
+        echo "#EXTINF:${duration:-0},$artist - $title" >> "$m3u_out"
+        echo "$m3u_dest" >> "$m3u_out"
+        case "$status" in
+            SKIP) pl_skipped=$((pl_skipped + 1)) ;;
+            PUSH)
+                stage_target="$STAGE_DIR/$rel"
+                if [[ ! -e "$stage_target" ]]; then
+                    mkdir -p "$(dirname "$stage_target")"
+                    ln -sf "$src" "$stage_target"
+                    pl_pushed=$((pl_pushed + 1))
+                fi
+                ;;
+        esac
+    done < "$decisions"
+
+    M3U_PATHS+=("$m3u_out")
+    TOTAL_PUSHED=$((TOTAL_PUSHED + pl_pushed))
+    TOTAL_SKIPPED=$((TOTAL_SKIPPED + pl_skipped))
+    TOTAL_MISSING=$((TOTAL_MISSING + pl_missing))
+    echo "  → push=$pl_pushed skip=$pl_skipped missing=$pl_missing"
+done
+
+# 5. ONE tar-stream to the phone with every staged file from every playlist.
+if (( TOTAL_PUSHED > 0 )); then
     push_start=$(date +%s)
     ( cd "$STAGE_DIR" && tar -cf - --dereference . ) | \
         adb shell "cd '$PHONE_MUSIC_ROOT' && tar -xf -"
     push_secs=$(( $(date +%s) - push_start ))
-    echo "→ Pushed $pushed file(s) in ${push_secs}s"
+    echo "→ Pushed $TOTAL_PUSHED file(s) in ${push_secs}s"
 fi
 
-# 5. Push the M3U last so migs music's auto-detect sees a complete playlist.
-# M3U lands in the app's media dir (not /sdcard/Music) — Android 11+ refuses to grant
-# SAF access to /sdcard/Music, but /sdcard/Android/media/<package>/ is owned by us and
-# needs no permission.
-M3U_DEST="$PHONE_SYNC_DIR/$PLAYLIST_NAME.m3u"
-adb push "$M3U_OUT" "$M3U_DEST" > /dev/null
+# 6. Push every M3U.
+for m3u in "${M3U_PATHS[@]}"; do
+    base=$(basename "$m3u")
+    adb push "$m3u" "$PHONE_SYNC_DIR/$base" > /dev/null
+done
 
-# 6. Trigger migs music's auto-import without requiring the user to open the app or visit
-#    the Playlists tab. The receiver is manifest-declared so this wakes the app from cold
-#    if needed; the import runs in well under a second. -f 0x20 sets
-#    FLAG_INCLUDE_STOPPED_PACKAGES so the broadcast also reaches the app when it's been
-#    force-stopped (fresh install, system kill, Settings → force stop) — without it, the
-#    receiver is silently skipped and the user has to open the app to trigger import manually.
-#
-# When invoked via the Mac orchestrator (`--no-broadcast`), the orchestrator pushes the
-# manifest and broadcasts ONCE at the end of all per-playlist syncs — the receiver then
-# does all imports + per-song orphan cleanup + whole-playlist prune in a single atomic
-# pass. Per-playlist broadcasting in that flow would race with the still-unwritten
-# manifest and miss the deleteOrphans flag.
+# 7. Trigger migs music's auto-import (once, after all M3Us land).
 imported_on_phone=true
 if [[ "$BROADCAST_ON_DONE" == true ]]; then
     adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20" > /dev/null 2>&1 || true
 
-    # Wait briefly for the phone to consume the M3U. The auto-import deletes the file on
-    # success — we poll for its absence so the Mac UI can confirm "imported, not just
-    # pushed". Bounded at ~5s; if still there after that, the Mac caller surfaces
-    # "pushed but not yet imported".
     imported_on_phone=false
-    quoted_m3u=$(printf '%q' "$M3U_DEST")
+    last_m3u_dest="$PHONE_SYNC_DIR/$(basename "${M3U_PATHS[-1]}")"
+    quoted_m3u=$(printf '%q' "$last_m3u_dest")
     for _ in $(seq 1 10); do
         if ! adb shell "[ -e $quoted_m3u ]" > /dev/null 2>&1; then
-            imported_on_phone=true
-            break
+            imported_on_phone=true; break
         fi
         sleep 0.5
     done
@@ -324,13 +265,13 @@ echo ""
 if [[ "$BROADCAST_ON_DONE" == false ]]; then
     echo "✓ Pushed (orchestrator will broadcast at end)."
 elif [[ "$imported_on_phone" == true ]]; then
-    echo "✓ Synced. Phone has imported \"$PLAYLIST_NAME\"."
+    echo "✓ Synced. Phone imported ${#M3U_PATHS[@]} playlist(s)."
 else
     echo "⚠ Pushed, but phone hasn't auto-imported within 5s."
     echo "  Open migs music to trigger the import manually."
 fi
-echo "  Pushed audio files:           $pushed"
-echo "  Already on phone (skipped):   $skipped"
-if (( missing_local > 0 )); then
-    echo "  Missing local files:          $missing_local  (file moved or deleted on Mac)"
+echo "  Pushed audio files:           $TOTAL_PUSHED"
+echo "  Already on phone (skipped):   $TOTAL_SKIPPED"
+if (( TOTAL_MISSING > 0 )); then
+    echo "  Missing local files:          $TOTAL_MISSING  (file moved or deleted on Mac)"
 fi
