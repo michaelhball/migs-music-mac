@@ -10,7 +10,13 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "MigsMusicMac",
-            path: "Sources/MigsMusicMac"
+            path: "Sources/MigsMusicMac",
+            // iTunesLibrary lets us read the Music.app library directly from its
+            // binary store — orders of magnitude faster than the AppleScript path.
+            // System framework, ships with macOS 10.13+; our deployment target is 13.
+            linkerSettings: [
+                .linkedFramework("iTunesLibrary"),
+            ]
         ),
     ]
 )
