@@ -244,7 +244,7 @@ private struct FooterView: View {
             .help("When a previously-synced playlist is unchecked, also remove its audio files from the phone — but only songs not used by any other playlist.")
 
             if model.syncing {
-                HStack {
+                HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Syncing \(model.currentSyncStep) of \(model.totalSyncSteps): \(model.currentSyncName)")
                         .font(.caption)
