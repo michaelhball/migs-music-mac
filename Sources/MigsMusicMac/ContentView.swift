@@ -223,12 +223,14 @@ private struct PlaylistRow: View {
                 .foregroundColor(.green)
                 .help("Synced — phone matches Music.app.")
         case .pending:
-            Image(systemName: "circle.dotted")
+            // Solid filled dot reads more clearly as "attention" than circle.dotted —
+            // matches the affordance many Mac apps use for "unread / needs action".
+            Image(systemName: "circle.fill")
                 .imageScale(.small)
                 .foregroundColor(.orange)
-                .help("Pending — contents changed since last sync. Click Sync to push.")
+                .help("Pending — contents differ from last sync, or never synced. Click Sync to push.")
         case .stale:
-            Image(systemName: "minus.circle")
+            Image(systemName: "minus.circle.fill")
                 .imageScale(.small)
                 .foregroundColor(.secondary)
                 .help("Will be removed from the phone on next Sync.")
