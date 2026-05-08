@@ -54,6 +54,31 @@ fi
 # Optional: copy the AppleScript export tool for parity, even though the GUI doesn't use it.
 cp export-playlist-as-m3u.applescript "${CONTENTS}/Resources/export-playlist-as-m3u.applescript"
 
+# Bundle Sparkle.framework. The framework includes its own helper apps (Updater.app)
+# and XPC services (Downloader.xpc, Installer.xpc) that handle the privileged install
+# step — we copy the entire framework so all of that comes along. Use the prebuilt
+# universal binary from the xcframework so the resulting .app runs on both Apple
+# Silicon and Intel hardware.
+SPARKLE_XCFRAMEWORK="$(find .build/artifacts -type d -name 'Sparkle.framework' -path '*/macos-arm64_x86_64/*' 2>/dev/null | head -1)"
+if [[ -z "${SPARKLE_XCFRAMEWORK}" ]]; then
+    echo "✗ Sparkle.framework not found under .build/artifacts. Did 'swift package resolve' run?" >&2
+    exit 1
+fi
+mkdir -p "${CONTENTS}/Frameworks"
+# -R preserves the symlinks inside Sparkle.framework (Versions/Current → Versions/B etc).
+cp -R "${SPARKLE_XCFRAMEWORK}" "${CONTENTS}/Frameworks/"
+
+# Re-sign the framework + its inner helpers ad-hoc so macOS doesn't refuse to load them.
+# (Each macOS-distributable framework needs a valid signature; without this the bundled
+# .app fails to launch with a code-signing error on Gatekeeper-strict configurations.)
+codesign --force --sign - --preserve-metadata=identifier,entitlements,flags,runtime \
+    --deep "${CONTENTS}/Frameworks/Sparkle.framework" 2>/dev/null || true
+
+# Re-sign the main binary itself so its embedded reference to Sparkle.framework
+# stays valid. Ad-hoc signing is enough for direct-download installs; once we add
+# notarization we'll switch to a Developer ID identity.
+codesign --force --sign - "${CONTENTS}/MacOS/${APP_NAME}" 2>/dev/null || true
+
 echo ""
 echo "✓ Built ${APP_BUNDLE}"
 echo ""

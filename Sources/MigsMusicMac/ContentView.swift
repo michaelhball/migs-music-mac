@@ -1,18 +1,17 @@
+import Sparkle
 import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    let updater: SPUUpdater
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let update = model.availableUpdate {
-                UpdateBanner(update: update)
-            }
             HeaderView(model: model)
             Divider()
             PlaylistListView(model: model)
             Divider()
-            FooterView(model: model)
+            FooterView(model: model, updater: updater)
         }
         .padding(12)
         .frame(width: 320, height: 460)
@@ -39,33 +38,6 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: UInt64(intervalSeconds * 1_000_000_000))
             }
         }
-    }
-}
-
-private struct UpdateBanner: View {
-    let update: AvailableUpdate
-
-    var body: some View {
-        Button {
-            NSWorkspace.shared.open(update.releaseURL)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .foregroundColor(.accentColor)
-                Text("Update available — v\(update.version)")
-                    .font(.caption)
-                Spacer()
-                Image(systemName: "arrow.up.right.square")
-                    .imageScale(.small)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Open the v\(update.version) release notes — has install instructions for both Homebrew and direct download.")
     }
 }
 
@@ -226,6 +198,7 @@ private struct PlaylistRow: View {
 
 private struct FooterView: View {
     @ObservedObject var model: AppModel
+    let updater: SPUUpdater
 
     /// Reads CFBundleShortVersionString from the running .app's Info.plist. Falls back
     /// to "?" if for some reason it's not set (shouldn't happen in a built bundle).
@@ -301,11 +274,20 @@ private struct FooterView: View {
 
                 Spacer()
 
-                Text("v\(appVersion)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .help("migs music \(appVersion)")
-                    .padding(.trailing, 4)
+                // Manual "Check for updates" entry. Sparkle also checks automatically
+                // in the background once a day (its default), but having a button means
+                // a curious user can ask "is there an update?" and immediately know.
+                // The version label tooltip explains both behaviours.
+                Button {
+                    updater.checkForUpdates()
+                } label: {
+                    Text("v\(appVersion)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("migs music \(appVersion). Click to check for updates. Sparkle also checks once a day automatically.")
+                .padding(.trailing, 4)
 
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .buttonStyle(.borderless)

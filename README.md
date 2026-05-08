@@ -43,4 +43,4 @@ First launch prompts to allow controlling Music.app — accept.
 ## Developer docs
 
 [CONTRIBUTING.md](CONTRIBUTING.md) — build internals, architecture, bundled bash script, contribution notes.
-[RELEASING.md](RELEASING.md) — version bumps, signing, GitHub Releases + Homebrew tap flow.
+[RELEASING.md](RELEASING.md) — version bumps, signing, GitHub Releases + Sparkle appcast flow.
