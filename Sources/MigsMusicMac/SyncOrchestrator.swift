@@ -52,7 +52,15 @@ enum SyncOrchestrator {
         // Single AUTO_IMPORT broadcast after all syncs land. Receiver reads manifest,
         // imports any pending m3u files (with per-song orphan cleanup), prunes whole
         // playlists not in the manifest, deletes the manifest. One atomic pass.
-        await broadcastAutoImport()
+        //
+        // Fire-and-forget: `am broadcast` blocks until the on-device receiver returns,
+        // and the receiver's import work for a 100+ track playlist takes 5–10s. Awaiting
+        // it added that delay to the user's perceived "Syncing…" time for no benefit —
+        // the data has already landed on the phone by this point. The phone catches up
+        // in the background; if the user reopens the popover after a moment it'll show
+        // the synced state. (Manifest + m3u files were pushed synchronously above, so
+        // there's no race where the broadcast fires before the data is in place.)
+        broadcastAutoImport()
 
         // Surface a per-playlist result for the UI's "Synced N / failed M" summary.
         // The bash script reports aggregate counts; we don't track per-playlist
@@ -108,14 +116,18 @@ enum SyncOrchestrator {
         )
     }
 
-    private static func broadcastAutoImport() async {
+    private static func broadcastAutoImport() {
         guard let adb = ADBService.adbPath() else { return }
         // -f 0x20 = FLAG_INCLUDE_STOPPED_PACKAGES, same as the bash script. Without it the
         // broadcast is silently dropped if the app's been force-stopped.
-        _ = await ProcessRunner.run(
-            executable: adb,
-            arguments: ["shell", "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20"]
-        )
+        // Detached so we don't block on `am broadcast`'s wait-for-receiver behaviour —
+        // see the call site for why.
+        Task.detached {
+            _ = await ProcessRunner.run(
+                executable: adb,
+                arguments: ["shell", "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20"]
+            )
+        }
     }
 
     /// Looks up the bundled bash script. build.sh copies it under Contents/Resources/ as
