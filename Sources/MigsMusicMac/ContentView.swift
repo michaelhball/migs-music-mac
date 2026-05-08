@@ -83,19 +83,11 @@ private struct HeaderView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            // Re-check the connected ADB device. Polling already does this every few
-            // seconds while the popover is open; this button is the manual escape hatch
-            // for "I just plugged in / accepted the auth dialog and want it now". Label
-            // explicitly says "phone" so it's not confused with the playlist reload icon.
-            Button {
-                Task { await model.refreshDevice() }
-            } label: {
-                Label("Check phone", systemImage: "arrow.clockwise")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderless)
-            .keyboardShortcut("r", modifiers: .command)
-            .help("Re-check phone connection (⌘R)")
+            // No manual "Check phone" button — USBDeviceMonitor watches IOKit and
+            // calls refreshDevice immediately on attach/detach (~100ms), so the
+            // device-state label updates the moment a phone is plugged in or
+            // unplugged. The polling loop in ContentView.task is a defensive
+            // fallback in case IOKit notifications miss something.
         }
     }
 
@@ -166,11 +158,11 @@ private struct PlaylistListView: View {
                     Button {
                         Task { await model.refreshPlaylists() }
                     } label: {
-                        Label("Music.app", systemImage: "arrow.clockwise")
+                        Label("Music", systemImage: "arrow.clockwise")
                             .font(.caption)
                     }
                     .buttonStyle(.borderless)
-                    .help("Reload playlists from Music.app. Music.app edits should refresh automatically; this is the manual fallback.")
+                    .help("Reload playlists from Music. Music edits should refresh automatically; this is the manual fallback.")
                 }
 
                 let visible = model.visiblePlaylists
@@ -220,29 +212,32 @@ private struct PlaylistRow: View {
     /// "pending". `neverSynced` shows nothing so empty rows stay clean.
     @ViewBuilder
     private var syncStatusIcon: some View {
-        let state = model.syncState(for: playlist)
-        switch state {
-        case .synced:
-            // Solid green dot to mirror the orange "pending" dot — same shape, different
-            // colour, glanceable status. Avoids the checkmark-symbol baggage.
-            Image(systemName: "circle.fill")
-                .imageScale(.small)
-                .foregroundColor(.green)
-                .help("Synced — phone matches Music.app.")
-        case .pending:
-            // Solid filled dot reads more clearly as "attention" than circle.dotted —
-            // matches the affordance many Mac apps use for "unread / needs action".
-            Image(systemName: "circle.fill")
-                .imageScale(.small)
-                .foregroundColor(.orange)
-                .help("Pending — contents differ from last sync, or never synced. Click Sync to push.")
-        case .stale:
-            Image(systemName: "minus.circle.fill")
-                .imageScale(.small)
-                .foregroundColor(.secondary)
-                .help("Will be removed from the phone on next Sync.")
-        case .neverSynced:
-            EmptyView()
+        // Only show the indicator when a phone is actually connected. The status
+        // refers to "synced with this phone" — without a phone it's ambiguous
+        // (which phone? a different one next time? Mac↔Music.app, perhaps?).
+        // Hiding it on disconnect makes the affordance unambiguous: dots only
+        // mean "phone-side sync state".
+        if case .connected = model.deviceState {
+            let state = model.syncState(for: playlist)
+            switch state {
+            case .synced:
+                Image(systemName: "circle.fill")
+                    .imageScale(.small)
+                    .foregroundColor(.green)
+                    .help("Synced — phone matches Music.")
+            case .pending:
+                Image(systemName: "circle.fill")
+                    .imageScale(.small)
+                    .foregroundColor(.orange)
+                    .help("Pending — contents differ from last sync, or never synced. Click Sync to push.")
+            case .stale:
+                Image(systemName: "minus.circle.fill")
+                    .imageScale(.small)
+                    .foregroundColor(.secondary)
+                    .help("Will be removed from the phone on next Sync.")
+            case .neverSynced:
+                EmptyView()
+            }
         }
     }
 }

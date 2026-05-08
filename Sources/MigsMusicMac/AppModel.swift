@@ -80,6 +80,13 @@ final class AppModel: ObservableObject {
     private var liveLibraryObserver: NSObjectProtocol?
     private var liveRefreshTask: Task<Void, Never>?
 
+    // MARK: - USB monitor
+
+    /// Watches IOKit for any USB device attach/detach. Triggers an immediate
+    /// refreshDevice on every event, so plug-in / unplug shows up in the
+    /// device-state label within ~100ms — no polling, no manual button.
+    private var usbMonitor: USBDeviceMonitor?
+
     // MARK: - Lifecycle
 
     init() {
@@ -87,11 +94,20 @@ final class AppModel: ObservableObject {
         Task { await refreshPlaylists() }
         Task { await checkForUpdate() }
         startLiveLibraryUpdates()
+        startUSBMonitor()
     }
 
     deinit {
         if let obs = liveLibraryObserver {
             NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
+    private func startUSBMonitor() {
+        usbMonitor = USBDeviceMonitor { [weak self] in
+            Task { @MainActor in
+                await self?.refreshDevice()
+            }
         }
     }
 
