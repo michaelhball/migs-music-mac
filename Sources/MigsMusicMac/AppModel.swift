@@ -1,5 +1,4 @@
 import Foundation
-import iTunesLibrary
 import SwiftUI
 
 /// View state for the menu bar app. Drives the playlist list, selection, sync progress, and
@@ -71,13 +70,15 @@ final class AppModel: ObservableObject {
 
     // MARK: - Live library subscription
 
-    /// Long-lived ITLibrary instance whose only purpose is to publish change events.
-    /// We subscribe to ITLibraryDidChangeNotification on this object — every Music.app
-    /// edit (track add/remove/rename, playlist reorder) fires the notification within
-    /// a few hundred ms, and we then call `refreshPlaylists` to pick up the change.
-    /// No polling, no manual reload required.
-    private var liveLibrary: ITLibrary?
-    private var liveLibraryObserver: NSObjectProtocol?
+    /// Watches Music.app's library bundle on disk. Every edit (track add/remove,
+    /// playlist rename, reorder) lands as a series of writes inside
+    /// `~/Music/Music/Music Library.musiclibrary/`; FSEvents coalesces them and
+    /// fires our callback ~250ms after the last write. We then re-run
+    /// listPlaylists via ITLibrary, which picks up the change.
+    ///
+    /// We tried ITLibraryDidChangeNotification first, but it doesn't appear to
+    /// fire reliably on modern macOS; FSEvents is the rock-solid signal source.
+    private var libraryWatcher: MusicLibraryWatcher?
     private var liveRefreshTask: Task<Void, Never>?
 
     // MARK: - USB monitor
@@ -97,12 +98,6 @@ final class AppModel: ObservableObject {
         startUSBMonitor()
     }
 
-    deinit {
-        if let obs = liveLibraryObserver {
-            NotificationCenter.default.removeObserver(obs)
-        }
-    }
-
     private func startUSBMonitor() {
         usbMonitor = USBDeviceMonitor { [weak self] in
             Task { @MainActor in
@@ -112,16 +107,7 @@ final class AppModel: ObservableObject {
     }
 
     private func startLiveLibraryUpdates() {
-        // Holding a long-lived ITLibrary keeps us subscribed to its change notifications.
-        // If construction fails (rare — Music.app library file missing or permission denied),
-        // we silently fall back to manual-refresh-only behavior.
-        guard let lib = try? ITLibrary(apiVersion: "1.0") else { return }
-        self.liveLibrary = lib
-        liveLibraryObserver = NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("ITLibraryDidChangeNotification"),
-            object: lib,
-            queue: .main
-        ) { [weak self] _ in
+        libraryWatcher = MusicLibraryWatcher { [weak self] in
             self?.scheduleLiveRefresh()
         }
     }
