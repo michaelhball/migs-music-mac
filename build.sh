@@ -41,6 +41,16 @@ cp Info.plist "${CONTENTS}/Info.plist"
 cp sync-playlist-to-phone.sh "${CONTENTS}/Resources/sync-playlist-to-phone.sh"
 chmod +x "${CONTENTS}/Resources/sync-playlist-to-phone.sh"
 
+# Bundle the migs-tracks CLI helper. The bash script invokes it instead of
+# osascript for playlist track-list dumps — ITLibrary is ~5x faster and scales
+# to 10k+ track playlists where AppleScript's per-track IPC becomes a real
+# bottleneck.
+TRACKS_BIN="${BIN_PATH}/migs-tracks"
+if [[ -f "${TRACKS_BIN}" ]]; then
+    cp "${TRACKS_BIN}" "${CONTENTS}/Resources/migs-tracks"
+    chmod +x "${CONTENTS}/Resources/migs-tracks"
+fi
+
 # Optional: copy the AppleScript export tool for parity, even though the GUI doesn't use it.
 cp export-playlist-as-m3u.applescript "${CONTENTS}/Resources/export-playlist-as-m3u.applescript"
 
