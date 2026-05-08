@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import iTunesLibrary
 
@@ -10,6 +11,10 @@ struct MusicPlaylist: Identifiable, Hashable, Codable {
     var id: String { name }
     let name: String
     let trackCount: Int
+    /// Short hex digest of the playlist's ordered track-id list. Used by the sync-status
+    /// indicator to detect "this playlist's contents have changed since the last successful
+    /// sync to the phone". Order-sensitive: re-ordering a playlist also flips the hash.
+    let contentHash: String
 }
 
 enum MusicAppError: Error, LocalizedError {
@@ -68,10 +73,29 @@ enum MusicAppService {
                         p.kind != .folder
                 }
                 let result = userPlaylists.map { p in
-                    MusicPlaylist(name: p.name, trackCount: p.items.count)
+                    MusicPlaylist(
+                        name: p.name,
+                        trackCount: p.items.count,
+                        contentHash: contentHash(for: p)
+                    )
                 }
                 continuation.resume(returning: .success(result))
             }
         }
     }
+}
+
+/// Order-sensitive content hash of a playlist's track list. We use ITLibrary's
+/// per-track persistentID (a UInt64 stable across launches) rather than file paths
+/// or names — fast, exact, and not perturbed by tag rewrites or location changes.
+/// Truncated to 16 hex chars (8 bytes of SHA-256) — collision risk for "did the
+/// playlist contents change" is negligible at this length.
+private func contentHash(for playlist: ITLibPlaylist) -> String {
+    var hasher = SHA256()
+    for item in playlist.items {
+        var le = item.persistentID.uint64Value.littleEndian
+        withUnsafeBytes(of: &le) { hasher.update(bufferPointer: $0) }
+    }
+    let digest = hasher.finalize()
+    return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
 }

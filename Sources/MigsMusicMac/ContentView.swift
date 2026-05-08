@@ -196,9 +196,10 @@ private struct PlaylistRow: View {
             get: { model.selected.contains(playlist.name) },
             set: { _ in model.toggle(playlist.name) }
         )) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(playlist.name).lineLimit(1).truncationMode(.tail)
                 Spacer()
+                syncStatusIcon
                 Text("\(playlist.trackCount)")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -206,6 +207,34 @@ private struct PlaylistRow: View {
         }
         .toggleStyle(.checkbox)
         .padding(.vertical, 2)
+    }
+
+    /// Tiny indicator that says, at a glance, whether this playlist's current contents
+    /// match what was last pushed to the phone. The icon is intentionally subtle —
+    /// .caption2-sized, secondary tint when "stale", primary when "synced", orange when
+    /// "pending". `neverSynced` shows nothing so empty rows stay clean.
+    @ViewBuilder
+    private var syncStatusIcon: some View {
+        let state = model.syncState(for: playlist)
+        switch state {
+        case .synced:
+            Image(systemName: "checkmark.circle.fill")
+                .imageScale(.small)
+                .foregroundColor(.green)
+                .help("Synced — phone matches Music.app.")
+        case .pending:
+            Image(systemName: "circle.dotted")
+                .imageScale(.small)
+                .foregroundColor(.orange)
+                .help("Pending — contents changed since last sync. Click Sync to push.")
+        case .stale:
+            Image(systemName: "minus.circle")
+                .imageScale(.small)
+                .foregroundColor(.secondary)
+                .help("Will be removed from the phone on next Sync.")
+        case .neverSynced:
+            EmptyView()
+        }
     }
 }
 

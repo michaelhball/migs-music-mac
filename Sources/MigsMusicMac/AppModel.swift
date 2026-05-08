@@ -1,4 +1,5 @@
 import Foundation
+import iTunesLibrary
 import SwiftUI
 
 /// View state for the menu bar app. Drives the playlist list, selection, sync progress, and
@@ -53,6 +54,14 @@ final class AppModel: ObservableObject {
     @Published var currentSyncName: String = ""
     @Published var lastResults: [SyncResult] = []
 
+    /// Snapshot of what we last successfully pushed to the phone, per playlist name.
+    /// Drives the per-row sync-status icon: a playlist whose current contentHash matches
+    /// its lastSynced.contentHash reads as "synced"; mismatch reads as "pending".
+    /// Persisted across launches so the indicator survives quitting the app.
+    @Published var lastSynced: [String: LastSynced] = AppModel.loadLastSynced() {
+        didSet { AppModel.saveLastSynced(lastSynced) }
+    }
+
     // MARK: - Updates
 
     /// Latest GitHub release if it's newer than the running version. Drives the in-app
@@ -60,12 +69,57 @@ final class AppModel: ObservableObject {
     /// has failed silently).
     @Published var availableUpdate: AvailableUpdate?
 
+    // MARK: - Live library subscription
+
+    /// Long-lived ITLibrary instance whose only purpose is to publish change events.
+    /// We subscribe to ITLibraryDidChangeNotification on this object — every Music.app
+    /// edit (track add/remove/rename, playlist reorder) fires the notification within
+    /// a few hundred ms, and we then call `refreshPlaylists` to pick up the change.
+    /// No polling, no manual reload required.
+    private var liveLibrary: ITLibrary?
+    private var liveLibraryObserver: NSObjectProtocol?
+    private var liveRefreshTask: Task<Void, Never>?
+
     // MARK: - Lifecycle
 
     init() {
         Task { await refreshDevice() }
         Task { await refreshPlaylists() }
         Task { await checkForUpdate() }
+        startLiveLibraryUpdates()
+    }
+
+    deinit {
+        if let obs = liveLibraryObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
+    private func startLiveLibraryUpdates() {
+        // Holding a long-lived ITLibrary keeps us subscribed to its change notifications.
+        // If construction fails (rare — Music.app library file missing or permission denied),
+        // we silently fall back to manual-refresh-only behavior.
+        guard let lib = try? ITLibrary(apiVersion: "1.0") else { return }
+        self.liveLibrary = lib
+        liveLibraryObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("ITLibraryDidChangeNotification"),
+            object: lib,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleLiveRefresh()
+        }
+    }
+
+    /// Debounced refresh trigger. Music.app can fire the change notification many
+    /// times in quick succession (e.g. while a multi-track import lands); we
+    /// coalesce to one refresh per ~250ms quiet window.
+    private func scheduleLiveRefresh() {
+        liveRefreshTask?.cancel()
+        liveRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if Task.isCancelled { return }
+            await self?.refreshPlaylists()
+        }
     }
 
     // MARK: - Actions
@@ -149,6 +203,39 @@ final class AppModel: ObservableObject {
         self.lastResults = results
         self.currentSyncName = ""
         self.syncing = false
+
+        // Update the per-playlist sync snapshot for every playlist that actually
+        // landed. The snapshot drives the in-row sync-status icon: a later edit
+        // in Music.app flips contentHash and the row reads "pending" until the
+        // user syncs again.
+        var updated = lastSynced
+        for r in results where r.success {
+            if let pl = playlists.first(where: { $0.name == r.playlistName }) {
+                updated[pl.name] = LastSynced(
+                    trackCount: pl.trackCount,
+                    contentHash: pl.contentHash
+                )
+            }
+        }
+        // Drop snapshots for playlists the user un-ticked AND that aren't in this sync —
+        // when they next sync without ticking those, the orphan-cleanup path on the phone
+        // removes them, and our "stale" indicator disappears too.
+        let stillSelected = Set(playlists.filter { selected.contains($0.name) }.map { $0.name })
+        for name in updated.keys where !stillSelected.contains(name) {
+            updated.removeValue(forKey: name)
+        }
+        self.lastSynced = updated
+    }
+
+    /// Per-row sync state used by the popover UI to render a status icon.
+    func syncState(for playlist: MusicPlaylist) -> SyncState {
+        let isTicked = selected.contains(playlist.name)
+        let snap = lastSynced[playlist.name]
+        if !isTicked {
+            return snap == nil ? .neverSynced : .stale
+        }
+        guard let snap = snap else { return .pending }
+        return snap.contentHash == playlist.contentHash ? .synced : .pending
     }
 
     /// Throttled to once per 6 hours via UserDefaults — the menu opens dozens of times a
@@ -213,4 +300,37 @@ final class AppModel: ObservableObject {
         guard let data = try? JSONEncoder().encode(list) else { return }
         UserDefaults.standard.set(data, forKey: playlistsCacheKey)
     }
+
+    private static let lastSyncedKey = "lastSyncedSnapshot"
+
+    private static func loadLastSynced() -> [String: LastSynced] {
+        guard
+            let data = UserDefaults.standard.data(forKey: lastSyncedKey),
+            let dict = try? JSONDecoder().decode([String: LastSynced].self, from: data)
+        else { return [:] }
+        return dict
+    }
+
+    private static func saveLastSynced(_ map: [String: LastSynced]) {
+        guard let data = try? JSONEncoder().encode(map) else { return }
+        UserDefaults.standard.set(data, forKey: lastSyncedKey)
+    }
+}
+
+/// Per-playlist record of the last successful sync to the phone.
+struct LastSynced: Codable, Hashable {
+    let trackCount: Int
+    let contentHash: String
+}
+
+/// Per-row sync state surfaced in the popover.
+enum SyncState {
+    /// Not ticked, never synced — no icon.
+    case neverSynced
+    /// Ticked but contents differ from last-pushed snapshot, OR never synced — pending.
+    case pending
+    /// Ticked and contents match last-pushed snapshot — synced.
+    case synced
+    /// Not ticked, has a snapshot — will be removed from the phone on next sync.
+    case stale
 }
