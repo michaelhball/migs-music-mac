@@ -126,17 +126,56 @@ missing_local=0
 #     `adb shell [ -e PATH ]` per track — for a 10k-library that's ~10–30 minutes of
 #     pure roundtrip overhead. One `find` + a local awk hash is O(N+M) and runs in
 #     under a second for any realistic library size.
-PHONE_FILES="$TMP_DIR/phone_files.txt"
+#
+#     We capture filesize alongside path so the dedup step below can match by
+#     (size, basename) instead of full-path equality. That handles the "song
+#     transferred via OnePlus Share lives at a different path than what we'd
+#     compute" case — same filename + same byte count = treat it as already on
+#     phone, point the M3U at the existing path, don't re-push.
+PHONE_FILES="$TMP_DIR/phone_files.tsv"
 phone_inventory_start=$(date +%s)
-adb shell "find $PHONE_MUSIC_ROOT -type f 2>/dev/null" > "$PHONE_FILES" || true
+# `stat` output on Android: `<size> <path>` — toybox/busybox supports `-c '%s %n'`.
+adb shell "find $PHONE_MUSIC_ROOT -type f -exec stat -c '%s	%n' {} + 2>/dev/null" > "$PHONE_FILES" || true
 phone_inventory_secs=$(( $(date +%s) - phone_inventory_start ))
 phone_count=$(wc -l < "$PHONE_FILES" | tr -d ' ')
 echo "→ Phone inventory: $phone_count file(s) (${phone_inventory_secs}s)"
 
-# 4b. Decide push-or-skip per track using awk for an O(N+M) hash lookup. Awk also
-#     computes the dest_path that would land on the phone — keeps that logic in one
-#     place rather than duplicating it in bash. Output columns:
-#       src \t dest \t rel \t artist \t title \t duration \t status (SKIP|PUSH)
+# 4b. Decide push-or-skip per track. Awk builds two indices over the phone
+#     inventory: full-path (exact match) and (size, basename) (same-content match
+#     under a different layout). For each track:
+#       - If exact dest path exists → SKIP (use computed dest in M3U)
+#       - Else if (size, basename) matches → SKIP, M3U points at the existing path
+#       - Else → PUSH (stage + tar-stream)
+#     Output columns:
+#       src \t m3u_dest \t rel \t artist \t title \t duration \t status (SKIP|PUSH)
+# Pre-compute file sizes in ONE batched stat call (the per-track loop version
+# of this was 12s for 126 tracks because each iteration spawned a subprocess).
+# `stat -f '%z\t%N' f1 f2 ...` handles many paths in a single invocation; `xargs
+# -0 -n 200` chunks 200-at-a-time to stay under arg-length limits while keeping
+# the number of subprocesses tiny.
+#
+# LC_ALL=C is necessary because BSD cut on macOS bails with "illegal byte
+# sequence" on UTF-8 multi-byte chars (umlauts, accents) when the locale is
+# UTF-8 and a track path contains them. Tab is single-byte, so byte-oriented
+# cut Just Works.
+MAC_SIZES="$TMP_DIR/mac_sizes.tsv"
+LC_ALL=C cut -f1 "$TRACK_LIST" | LC_ALL=C tr '\n' '\0' | \
+    xargs -0 -n 200 stat -f '%z	%N' 2>/dev/null > "$MAC_SIZES" || true
+
+# Join sizes onto the track list. Awk reads sizes file into a hash keyed by path.
+TRACK_LIST_SIZED="$TMP_DIR/tracks_with_size.tsv"
+awk -F'\t' -v sizes_file="$MAC_SIZES" '
+    BEGIN {
+        while ((getline line < sizes_file) > 0) {
+            tab = index(line, "\t")
+            if (tab == 0) continue
+            sizes[substr(line, tab + 1)] = substr(line, 1, tab - 1)
+        }
+        close(sizes_file)
+    }
+    { print $0 "\t" (sizes[$1] != "" ? sizes[$1] : "") }
+' "$TRACK_LIST" > "$TRACK_LIST_SIZED"
+
 DECISIONS="$TMP_DIR/decisions.tsv"
 awk -F'\t' \
     -v phone_file="$PHONE_FILES" \
@@ -144,21 +183,41 @@ awk -F'\t' \
     -v phone_root="$PHONE_MUSIC_ROOT" \
     '
     BEGIN {
-        while ((getline line < phone_file) > 0) on_phone[line] = 1
+        while ((getline line < phone_file) > 0) {
+            # phone_file format: "<size>\t<path>"
+            tab = index(line, "\t")
+            if (tab == 0) continue
+            size = substr(line, 1, tab - 1)
+            path = substr(line, tab + 1)
+            on_phone_path[path] = 1
+            n = split(path, parts, "/"); base = parts[n]
+            sizebase[size "|" base] = path
+        }
         close(phone_file)
     }
     {
-        src = $1; artist = $2; title = $3; duration = $4
+        # Input columns: src \t artist \t title \t duration \t size
+        src = $1; artist = $2; title = $3; duration = $4; sz = $5
         if (music_root != "" && index(src, music_root "/") == 1) {
             rel = substr(src, length(music_root) + 2)
         } else {
             n = split(src, parts, "/"); rel = parts[n]
         }
-        dest = phone_root "/" rel
-        status = (dest in on_phone) ? "SKIP" : "PUSH"
-        print src "\t" dest "\t" rel "\t" artist "\t" title "\t" duration "\t" status
+        computed_dest = phone_root "/" rel
+        status = "PUSH"
+        m3u_dest = computed_dest
+        if (computed_dest in on_phone_path) {
+            status = "SKIP"
+        } else {
+            n2 = split(rel, rparts, "/"); basename = rparts[n2]
+            if (sz != "" && (sz "|" basename) in sizebase) {
+                status = "SKIP"
+                m3u_dest = sizebase[sz "|" basename]
+            }
+        }
+        print src "\t" m3u_dest "\t" rel "\t" artist "\t" title "\t" duration "\t" status
     }
-    ' "$TRACK_LIST" > "$DECISIONS"
+    ' "$TRACK_LIST_SIZED" > "$DECISIONS"
 
 # 4c. Build the M3U in track order. For PUSH rows, also stage a symlink in $STAGE_DIR
 #     mirroring the desired layout under /sdcard/Music — `adb push` follows symlinks,
@@ -185,13 +244,20 @@ while IFS=$'\t' read -r src dest rel artist title duration status; do
     esac
 done < "$DECISIONS"
 
-# 4d. Bulk push everything that needs pushing in one adb session. Per-file
-#     `adb push` had ~50-200ms session overhead PER FILE; with hundreds of new
-#     tracks that's all roundtrip time we never had to pay. One push of the staging
-#     tree transfers everything in a single session.
+# 4d. Bulk push via a single tar-stream over `adb shell`. Earlier attempts with
+#     `adb push stage_dir/ /sdcard/Music/` had two problems: (1) it doesn't
+#     dereference symlinks (it tries to create remote symlinks, which fails on
+#     /sdcard's FUSE-emulated FS), and (2) `push localdir/ remotedir/` puts
+#     localdir AS A SUBDIRECTORY of remotedir (`/sdcard/Music/stage/...`).
+#
+#     Tar handles both correctly: --dereference follows the symlinks at archive
+#     time, and `tar -xf -` at the remote extracts in CWD, no path-mangling. One
+#     adb session for the whole batch — replaces N per-file pushes that paid
+#     ~50-200ms session overhead each.
 if (( pushed > 0 )); then
     push_start=$(date +%s)
-    adb push "$STAGE_DIR/" "$PHONE_MUSIC_ROOT/" > /dev/null
+    ( cd "$STAGE_DIR" && tar -cf - --dereference . ) | \
+        adb shell "cd '$PHONE_MUSIC_ROOT' && tar -xf -"
     push_secs=$(( $(date +%s) - push_start ))
     echo "→ Pushed $pushed file(s) in ${push_secs}s"
 fi
