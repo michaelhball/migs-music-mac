@@ -13,7 +13,7 @@ Common problems with the Mac sync app. If something here doesn't help, check `Co
 - **Cable issue.** Some USB cables only carry power, not data. Try another cable. The phone needs to show as a "File transfer" target, not just charging.
 - **USB debugging not enabled.** On the phone: Settings → About phone → tap *Build number* 7 times to unlock developer mode → Settings → System → Developer options → enable **USB debugging**.
 - **Authorization not accepted.** First time you plug in to this Mac, the phone shows a "Allow USB debugging?" dialog. Accept (and tick "Always allow from this computer" so it doesn't re-prompt).
-- Click the menu bar's refresh button after plugging in. The app polls every 3s while the menu is open, but a manual click is faster.
+- The app auto-detects USB attach/detach via IOKit, so plugging in shows up in the popover within ~100ms — no manual refresh button. If the state seems stuck, quit the app from the dropdown and relaunch.
 
 ## "Unauthorised — accept the dialog on your phone"
 
@@ -38,11 +38,19 @@ brew install android-platform-tools
 
 The app checks these paths in order: `~/Library/Android/sdk/platform-tools/adb`, `/usr/local/bin/adb`, `/opt/homebrew/bin/adb`, and the shell `PATH`.
 
-## "Couldn't load playlists" with an osascript error
+## "Couldn't load playlists" or empty playlist list
 
-- **First run prompts for AppleEvents permission.** macOS shows "*migs music* would like to control Music." Click **OK**.
-- If you accidentally clicked Don't Allow: go to **System Settings → Privacy & Security → Automation → migs music → Music** and toggle on. Then click Refresh in the menu bar app.
-- **Music.app isn't installed.** The app uses Music.app exclusively (no Spotify, no Tidal, no other source). On macOS 13+ it should be present by default.
+- **Media & Apple Music permission denied.** macOS prompts on first launch with "*migs music* would like to access Apple Music data." Click **OK**.
+- If you accidentally clicked Don't Allow: open **System Settings → Privacy & Security → Media & Apple Music**, toggle migs music on. The popover refreshes itself within ~200ms.
+- **Music.app isn't installed.** The app reads via Apple's `iTunesLibrary` framework and only knows about Apple Music's library (no Spotify, no Tidal, no other source). On macOS 13+ Music.app is present by default.
+
+## Auto-update isn't offering me a new release
+
+The Mac app uses Sparkle for auto-updates and checks the GitHub-Pages-hosted `appcast.xml` once a day in the background. If the version label in the popover footer never says "Update available" despite a newer release being live:
+
+- **Force a check:** click the version label in the popover footer. That triggers a synchronous `checkForUpdates()` and shows the result either way.
+- **Network blocked.** Sparkle fetches `https://michaelhball.github.io/migs-music-mac/appcast.xml` over HTTPS. If your network blocks it, no update will ever appear. Try fetching that URL in a browser.
+- **Update feed parse error.** A regression in `release.sh` could ship a malformed appcast. Check Console.app filtered to `Sparkle` for parse errors and open an issue.
 
 ## Sync says success but phone shows nothing
 
