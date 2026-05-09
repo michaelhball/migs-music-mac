@@ -1,0 +1,146 @@
+# Auto-publish a release on every `vX.Y.Z` tag push.
+#
+# Triggered by:
+#   git tag v0.2.0
+#   git push origin v0.2.0
+#
+# What this does:
+#   1. Builds dist/MigsMusicMac.app (bundles Sparkle.framework, ad-hoc signs).
+#   2. Packages dist/migs-music-X.Y.Z.dmg with the Finder-window styling.
+#   3. Signs the DMG with the Sparkle EdDSA key (from the GitHub Secret).
+#   4. Updates appcast.xml with the new <item> + commits back to main, so
+#      the GitHub-Pages-served feed reflects the release.
+#   5. Creates the GitHub Release (or uploads the DMG to an existing one).
+#
+# After the workflow goes green, existing v0.1.0 installs see "Update
+# available" within ~24h via Sparkle's daily background check (or
+# instantly if the user clicks the version label in the popover footer).
+#
+# Required GitHub Secret (Settings → Secrets and variables → Actions):
+#   SPARKLE_PRIVATE_KEY  Ed25519 private key contents (44-byte base64,
+#                        the file body of workspace/sparkle-private-key.txt).
+#
+# macos-14 runner is required — release.sh uses macOS-only tools
+# (PlistBuddy, hdiutil, codesign, AppleScript window styling). The free
+# tier covers a few releases per month at the 10× billing rate.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      # contents: write so the workflow can commit appcast.xml + Info.plist
+      # back to main and create the GitHub Release.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so the commit-back step doesn't shallow-fetch.
+          fetch-depth: 0
+          # GITHUB_TOKEN is fine for committing to the same repo.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "✗ Tag must be vMAJOR.MINOR.PATCH (e.g. v0.1.0). Got: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Set Info.plist version + monotonic build number
+        # Stamp the build with the tag's version. The build counter uses
+        # github.run_number — guaranteed monotonic across workflow runs in
+        # this repo, which is exactly what CFBundleVersion wants.
+        run: |
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" \
+            Info.plist
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleVersion ${{ github.run_number }}" \
+            Info.plist
+          echo "Info.plist after stamping:"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Info.plist
+
+      - name: Resolve SwiftPM dependencies (Sparkle)
+        # Pre-fetch so build.sh doesn't have to do it later. Caches the
+        # ~17MB Sparkle xcframework artifact.
+        run: swift package resolve
+
+      - name: Write Sparkle private key to a temp file
+        # release.sh's sign_update step honours SPARKLE_ED_KEY_FILE if set.
+        # The secret is the 44-byte base64 key body; sign_update reads it
+        # raw without a header.
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          KEY_FILE="${RUNNER_TEMP}/sparkle-private-key.txt"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          echo "SPARKLE_ED_KEY_FILE=${KEY_FILE}" >> "$GITHUB_ENV"
+
+      - name: Build, sign, package DMG, update appcast
+        # release.sh without --tag/--publish does the build + DMG + sign +
+        # appcast update locally, stopping short of any git ceremony. We
+        # handle the commit/push/release-upload in the workflow ourselves
+        # so it's all in one place and easier to debug if a step fails.
+        run: ./release.sh "${{ steps.version.outputs.version }}"
+
+      - name: Configure git identity for the release commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit Info.plist + appcast.xml back to main
+        # The release commit captures both: the version stamp on Info.plist
+        # so future builds reflect the latest released version, and the
+        # appcast.xml entry that's served from GitHub Pages.
+        # `[skip ci]` so the commit doesn't accidentally re-trigger any
+        # other workflow we add later.
+        run: |
+          git fetch origin main
+          git checkout main
+          git pull --rebase origin main
+          # Re-apply the Info.plist + appcast.xml mutations on top of the
+          # latest main, in case main moved while we were building.
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" \
+            Info.plist
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleVersion ${{ github.run_number }}" \
+            Info.plist
+          # appcast.xml from release.sh's mutation is already in the working tree.
+          git add Info.plist appcast.xml
+          if ! git diff --cached --quiet; then
+            git commit -m "Release v${{ steps.version.outputs.version }} [skip ci]
+
+          Generated by .github/workflows/release.yml.
+          Build number: ${{ github.run_number }}."
+            git push origin main
+          fi
+
+      - name: Create / update GitHub Release with the DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DMG="dist/migs-music-${{ steps.version.outputs.version }}.dmg"
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            gh release upload "v${{ steps.version.outputs.version }}" "$DMG" --clobber
+          else
+            gh release create "v${{ steps.version.outputs.version }}" "$DMG" \
+              --title "v${{ steps.version.outputs.version }}" \
+              --notes "Release v${{ steps.version.outputs.version }}. See commit log for changes."
+          fi

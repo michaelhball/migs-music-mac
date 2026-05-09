@@ -141,7 +141,15 @@ if [[ ! -x "$SIGN_TOOL" ]]; then
     exit 1
 fi
 echo "→ Signing DMG with EdDSA key..."
-SIGN_OUTPUT=$("$SIGN_TOOL" "$DMG_PATH")
+# Default: sign_update reads the private key from the macOS Keychain (where
+# generate_keys stored it). On CI runners we have no Keychain access, so the
+# workflow drops the secret value into a file and exports SPARKLE_ED_KEY_FILE
+# pointing at it. Honour that here, falling through to Keychain otherwise.
+if [[ -n "${SPARKLE_ED_KEY_FILE:-}" ]]; then
+    SIGN_OUTPUT=$("$SIGN_TOOL" -f "$SPARKLE_ED_KEY_FILE" "$DMG_PATH")
+else
+    SIGN_OUTPUT=$("$SIGN_TOOL" "$DMG_PATH")
+fi
 
 # Update appcast.xml. Initialise on first run if it doesn't exist.
 PUB_DATE=$(LC_TIME=en_US.UTF-8 date "+%a, %d %b %Y %H:%M:%S %z")
