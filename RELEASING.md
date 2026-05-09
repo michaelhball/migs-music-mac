@@ -31,6 +31,26 @@ Without `--publish` (or with just `--tag`), `release.sh` stops short of pushing 
 
 After the release lands, GitHub Pages re-serves the appcast within a couple of minutes. Existing installs of the running app see the new version on their next daily Sparkle check, or the user can click the version label in the popover to force a check immediately.
 
+## Trigger model
+
+**Releases are triggered locally** — you run `./release.sh <version> --publish` from your Mac, the same one that has the Sparkle EdDSA private key in its Keychain. There is no `.github/workflows/release.yml` for this repo: a tag push doesn't kick off CI.
+
+This is deliberate for now. CI on a `macos-14` GitHub Actions runner *can* sign Sparkle updates if you put the EdDSA private key in a `SPARKLE_PRIVATE_KEY` GitHub Secret, but that means base64-shipping the key into another system. For an app whose audience is "you and a few friends," local trigger is simpler and keeps the key on one machine. If/when audience grows or you want symmetric "tag push deploys both apps," see the option below.
+
+### Option: full CI (deferred)
+
+To wire CI:
+
+1. Add the Sparkle private key contents as a GitHub Secret: `gh secret set SPARKLE_PRIVATE_KEY < workspace/sparkle-private-key.txt`.
+2. Recreate `.github/workflows/release.yml` with a `macos-14` runner that:
+   - Adds the key to a temporary Keychain via `security import`
+   - Runs `./release.sh <version>` (omits `--publish`; CI does the GitHub release upload itself)
+   - Uses `gh release upload` to attach the DMG
+   - Commits the version bump + appcast update back to `main` via the workflow's bot identity
+3. Tag pushes (`git push origin v0.2.0`) then deploy automatically.
+
+~30 minutes to write + test. The git history before commit `d512713` had a previous version of this workflow as a starting point if you need it.
+
 ## Notarization (paid, deferred)
 
 Without an Apple Developer ID ($99/yr), first-launch users see a Gatekeeper "unidentified developer" warning that they bypass with right-click → Open. For Sparkle's auto-update path the bundle is swapped in-place and Gatekeeper generally doesn't re-prompt — but **this needs validation on a fresh non-dev Mac before we trust it**.
