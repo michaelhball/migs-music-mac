@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var model: AppModel
     let updater: SPUUpdater
+    @ObservedObject var updateState: UpdateState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -11,7 +12,7 @@ struct ContentView: View {
             Divider()
             PlaylistListView(model: model)
             Divider()
-            FooterView(model: model, updater: updater)
+            FooterView(model: model, updater: updater, updateState: updateState)
         }
         .padding(12)
         .frame(width: 320, height: 460)
@@ -199,6 +200,7 @@ private struct PlaylistRow: View {
 private struct FooterView: View {
     @ObservedObject var model: AppModel
     let updater: SPUUpdater
+    @ObservedObject var updateState: UpdateState
 
     /// Reads CFBundleShortVersionString from the running .app's Info.plist. Falls back
     /// to "?" if for some reason it's not set (shouldn't happen in a built bundle).
@@ -274,20 +276,33 @@ private struct FooterView: View {
 
                 Spacer()
 
-                // Manual "Check for updates" entry. Sparkle also checks automatically
-                // in the background once a day (its default), but having a button means
-                // a curious user can ask "is there an update?" and immediately know.
-                // The version label tooltip explains both behaviours.
-                Button {
-                    updater.checkForUpdates()
-                } label: {
-                    Text("v\(appVersion)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                // When Sparkle's silent background check has surfaced a newer version
+                // we swap the version label for an "Update available" affordance. The
+                // tap target is the same — clicking opens Sparkle's install dialog —
+                // but the copy now tells the user something happened.
+                if let staged = updateState.availableVersion {
+                    Button {
+                        updater.checkForUpdates()
+                    } label: {
+                        Label("Update available", systemImage: "arrow.down.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("migs music v\(staged) is available. Click to install.")
+                    .padding(.trailing, 4)
+                } else {
+                    Button {
+                        updater.checkForUpdates()
+                    } label: {
+                        Text("v\(appVersion)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("migs music \(appVersion). Click to check for updates. Sparkle also checks once a day automatically.")
+                    .padding(.trailing, 4)
                 }
-                .buttonStyle(.borderless)
-                .help("migs music \(appVersion). Click to check for updates. Sparkle also checks once a day automatically.")
-                .padding(.trailing, 4)
 
                 Button("Quit") { NSApplication.shared.terminate(nil) }
                     .buttonStyle(.borderless)

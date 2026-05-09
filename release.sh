@@ -171,12 +171,7 @@ NEW_ITEM=$(cat <<EOF
             <sparkle:version>${NEW_BUILD}</sparkle:version>
             <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="${DOWNLOAD_URL}"
-                length="${DMG_SIZE}"
-                type="application/octet-stream"
-                ${SIGN_OUTPUT}
-            />
+            <enclosure url="${DOWNLOAD_URL}" type="application/octet-stream" ${SIGN_OUTPUT} />
         </item>
 EOF
 )
