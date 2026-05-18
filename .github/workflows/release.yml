@@ -111,18 +111,21 @@ jobs:
         # `[skip ci]` so the commit doesn't accidentally re-trigger any
         # other workflow we add later.
         run: |
+          # The build stamped Info.plist and release.sh (re)wrote appcast.xml,
+          # so the tree is dirty and `pull --rebase` would refuse. Snapshot
+          # appcast.xml, hard-reset the disposable CI tree to the latest main,
+          # then restore appcast.xml and re-stamp Info.plist on top. Works
+          # whether appcast.xml is brand-new (first release) or already tracked.
           git fetch origin main
-          git checkout main
-          git pull --rebase origin main
-          # Re-apply the Info.plist + appcast.xml mutations on top of the
-          # latest main, in case main moved while we were building.
+          cp appcast.xml "${RUNNER_TEMP}/appcast.xml.new"
+          git reset --hard origin/main
+          cp "${RUNNER_TEMP}/appcast.xml.new" appcast.xml
           /usr/libexec/PlistBuddy \
             -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" \
             Info.plist
           /usr/libexec/PlistBuddy \
             -c "Set :CFBundleVersion ${{ github.run_number }}" \
             Info.plist
-          # appcast.xml from release.sh's mutation is already in the working tree.
           git add Info.plist appcast.xml
           if ! git diff --cached --quiet; then
             git commit -m "Release v${{ steps.version.outputs.version }} [skip ci]
