@@ -1,3 +1,4 @@
+import AppKit
 import Sparkle
 import SwiftUI
 
@@ -244,21 +245,46 @@ private struct FooterView: View {
                 }
             } else if !model.lastResults.isEmpty {
                 let succeeded = model.lastResults.filter { $0.success }.count
-                let failed = model.lastResults.count - succeeded
+                let failures = model.lastResults.filter { !$0.success }
+                let failed = failures.count
                 Text(failed == 0
                     ? "Synced \(succeeded) playlist\(succeeded == 1 ? "" : "s")"
                     : "Synced \(succeeded), \(failed) failed")
                     .font(.caption)
                     .foregroundColor(failed == 0 ? .secondary : .red)
-                let failures = model.lastResults.filter { !$0.success }
+
+                // When a sync fails, try to explain *what* went wrong and *how*
+                // to fix it — a missing permission, an unplugged phone, etc. —
+                // instead of leaving the user to decode the raw script log.
+                if let diagnosis = failures.first.flatMap({ SyncDiagnosis.classify($0.output) }) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(diagnosis.title)
+                            .font(.caption).bold()
+                        Text(diagnosis.suggestion)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let url = diagnosis.settingsURL {
+                            Button("Open Privacy Settings") {
+                                _ = NSWorkspace.shared.open(url)
+                            }
+                            .controlSize(.small)
+                            .padding(.top, 2)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.red.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+
                 ForEach(failures) { result in
                     Text("✗ \(result.playlistName)").font(.caption2).foregroundColor(.red)
                 }
-                // Surface the sync script's combined output so a failure is
-                // actually diagnosable from the popover — previously the UI
-                // showed only the red playlist names with no hint of *why*
-                // they failed. Every failed result carries the same combined
-                // log, so show it once.
+
+                // The full script log stays available underneath the friendly
+                // summary, for when the diagnosis above isn't enough. Every
+                // failed result carries the same combined output.
                 if let raw = failures.first?.output {
                     let detail = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !detail.isEmpty {
