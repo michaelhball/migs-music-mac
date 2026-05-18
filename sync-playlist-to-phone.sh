@@ -119,6 +119,28 @@ APPLESCRIPT
     fi
 }
 
+# Map a playlist name to a filename that's safe on the phone. Android's
+# emulated /sdcard storage is FAT-derived and rejects < > : " / \ | ? * in
+# filenames — `adb push` fails outright with "Operation not permitted" on any
+# of them, which is what made a playlist like "<3" abort the entire sync. We
+# replace each illegal character with '_'. The GUI applies the identical rule
+# to the sync manifest it pushes (see SyncOrchestrator.phoneSafeName), so the
+# m3u filename and its manifest entry stay in agreement — the phone's
+# manifest-based playlist pruning depends on the two matching exactly.
+sanitize_for_phone() {
+    local s="$1"
+    s="${s//\//_}"
+    s="${s//\\/_}"
+    s="${s//</_}"
+    s="${s//>/_}"
+    s="${s//:/_}"
+    s="${s//\"/_}"
+    s="${s//|/_}"
+    s="${s//\?/_}"
+    s="${s//\*/_}"
+    printf '%s' "$s"
+}
+
 # 3. Discover the Music.app media root for clean relative paths.
 MAC_MUSIC_ROOT=""
 for candidate in \
@@ -243,7 +265,7 @@ for PLAYLIST_NAME in "${ARGS[@]}"; do
     ' "$sized" > "$decisions"
 
     # 4d. Build the M3U + stage missing files (deduped across playlists).
-    m3u_out="$TMP_DIR/${PLAYLIST_NAME}.m3u"
+    m3u_out="$TMP_DIR/$(sanitize_for_phone "$PLAYLIST_NAME").m3u"
     echo "#EXTM3U" > "$m3u_out"
     pl_pushed=0; pl_skipped=0; pl_missing=0
     while IFS=$'\t' read -r src m3u_dest rel artist title duration status; do
@@ -299,12 +321,18 @@ if (( TOTAL_PUSHED > 0 )); then
     T "tar-stream push ($TOTAL_PUSHED files)"
 fi
 
-# 6. Push every M3U.
+# 6. Push every M3U. One playlist's push failing must not abort the batch and
+# drag every other playlist down with it under `set -e` — report it and carry
+# on. (m3u filenames are already phone-safe; see sanitize_for_phone above.)
+m3u_push_failures=0
 for m3u in "${M3U_PATHS[@]}"; do
     base=$(basename "$m3u")
-    adb push "$m3u" "$PHONE_SYNC_DIR/$base" > /dev/null
+    if ! adb push "$m3u" "$PHONE_SYNC_DIR/$base" > /dev/null 2>&1; then
+        echo "⚠ Could not copy playlist file \"$base\" to the phone." >&2
+        m3u_push_failures=$((m3u_push_failures + 1))
+    fi
 done
-T "pushed ${#M3U_PATHS[@]} m3u(s)"
+T "pushed $(( ${#M3U_PATHS[@]} - m3u_push_failures )) m3u(s)"
 
 # 6a. Sidecar with the audio-pushed count. Lets the phone-side import skip the
 # expensive MediaStore→Room rescan on no-op resyncs (audioPushed=0). Anything
@@ -312,7 +340,7 @@ T "pushed ${#M3U_PATHS[@]} m3u(s)"
 # an unfamiliar file and carry on.
 stats_file="$TMP_DIR/.migs-sync-stats"
 echo "audioPushed=$TOTAL_PUSHED" > "$stats_file"
-adb push "$stats_file" "$PHONE_SYNC_DIR/.migs-sync-stats" > /dev/null
+adb push "$stats_file" "$PHONE_SYNC_DIR/.migs-sync-stats" > /dev/null 2>&1 || true
 T "pushed sync-stats sidecar"
 
 # 7. Trigger migs music's auto-import (once, after all M3Us land).
@@ -349,4 +377,7 @@ echo "  Pushed audio files:           $TOTAL_PUSHED"
 echo "  Already on phone (skipped):   $TOTAL_SKIPPED"
 if (( TOTAL_MISSING > 0 )); then
     echo "  Missing local files:          $TOTAL_MISSING  (file moved or deleted on Mac)"
+fi
+if (( m3u_push_failures > 0 )); then
+    echo "  Playlist files NOT copied:    $m3u_push_failures  (see warnings above)"
 fi

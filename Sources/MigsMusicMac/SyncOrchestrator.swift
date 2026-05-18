@@ -86,9 +86,13 @@ enum SyncOrchestrator {
         // Manifest format: optional first-line `#opts:k=v,k=v` for flags, then one playlist
         // name per line. Strip any embedded newlines / carriage returns from playlist names
         // — Music.app theoretically allows them but they'd corrupt the line-per-name format.
+        // Replace filesystem-illegal characters via phoneSafeName so each manifest entry
+        // matches the .m3u filename the bash script pushes for that playlist (the phone
+        // prunes any playlist whose name isn't in the manifest, so they MUST agree).
         // Also drop any name starting with `#` so it can't be mistaken for an opts line.
         let sanitized = playlistNames
             .map { $0.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ") }
+            .map { phoneSafeName($0) }
             .filter { !$0.hasPrefix("#") && !$0.isEmpty }
         var lines: [String] = []
         if deleteOrphanedAudio {
@@ -114,6 +118,19 @@ enum SyncOrchestrator {
             executable: adb,
             arguments: ["push", tempURL.path, "/sdcard/Android/media/com.migsmusic/sync/.migs-sync-manifest"]
         )
+    }
+
+    /// Replaces characters that Android's FAT-derived `/sdcard` storage rejects in
+    /// filenames (`< > : " / \ | ? *`) with `_`. Playlist names reach the phone as
+    /// `.m3u` filenames, and `adb push` fails outright with "Operation not
+    /// permitted" on any of them — a single offending name (e.g. "<3") previously
+    /// aborted the entire sync. The bash script's `sanitize_for_phone` applies the
+    /// identical rule when naming the m3u files; manifest entries built here must
+    /// match those filenames, because the phone prunes any playlist whose name
+    /// isn't listed in the manifest.
+    private static func phoneSafeName(_ name: String) -> String {
+        let illegal: Set<Character> = ["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]
+        return String(name.map { illegal.contains($0) ? "_" : $0 })
     }
 
     private static func broadcastAutoImport() {
