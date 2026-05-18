@@ -76,9 +76,16 @@ done
 dump_playlist() {
     local name="$1" out="$2"
     if [[ -n "$MIGS_TRACKS" ]]; then
-        "$MIGS_TRACKS" "$name" --out "$out" || true
+        # Capture the helper's stderr so a failure (denied Music-library access,
+        # a Gatekeeper-blocked helper binary, a missing playlist) is *reported*
+        # instead of silently swallowed by a bare `|| true`. `if ! …` keeps the
+        # failure from aborting the whole script under `set -e`.
+        local err
+        if ! err=$("$MIGS_TRACKS" "$name" --out "$out" 2>&1 >/dev/null); then
+            echo "⚠ Could not read \"$name\" via migs-tracks: ${err:-no detail (the helper may be blocked by macOS Gatekeeper)}" >&2
+        fi
     else
-        osascript - "$name" "$out" <<'APPLESCRIPT'
+        if ! osascript - "$name" "$out" > /dev/null 2>&1 <<'APPLESCRIPT'
 on run argv
     set playlistName to item 1 of argv
     set outPath to item 2 of argv
@@ -106,6 +113,9 @@ on run argv
     end tell
 end run
 APPLESCRIPT
+        then
+            echo "⚠ Could not read \"$name\" via AppleScript — the playlist is missing, its name contains a \"/\", or Music-library access hasn't been granted." >&2
+        fi
     fi
 }
 
@@ -262,6 +272,22 @@ for PLAYLIST_NAME in "${ARGS[@]}"; do
     echo "  → push=$pl_pushed skip=$pl_skipped missing=$pl_missing"
     T "  decided + staged"
 done
+
+# Every playlist's track dump came back empty — there is nothing to sync. This
+# is almost always a Music-library access problem (see the per-playlist warnings
+# above): macOS hasn't granted "Media & Apple Music" access, or the bundled
+# migs-tracks helper was blocked by Gatekeeper on first launch. Exit with a
+# clear message here rather than falling through to section 6, where macOS's
+# bash 3.2 would abort on `"${M3U_PATHS[@]}"` — expanding an empty array under
+# `set -u` is an `unbound variable` error — burying the real cause under a
+# cryptic shell crash that the GUI reports only as "all N playlists failed".
+if (( ${#M3U_PATHS[@]} == 0 )); then
+    echo "" >&2
+    echo "✗ None of the ${#ARGS[@]} requested playlist(s) produced any tracks — nothing synced." >&2
+    echo "  Grant access in System Settings → Privacy & Security → Media & Apple Music," >&2
+    echo "  then try again. (See the per-playlist warnings above for the underlying error.)" >&2
+    exit 1
+fi
 
 # 5. ONE tar-stream to the phone with every staged file from every playlist.
 if (( TOTAL_PUSHED > 0 )); then
