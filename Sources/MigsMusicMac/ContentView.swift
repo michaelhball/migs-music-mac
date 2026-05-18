@@ -250,8 +250,30 @@ private struct FooterView: View {
                     : "Synced \(succeeded), \(failed) failed")
                     .font(.caption)
                     .foregroundColor(failed == 0 ? .secondary : .red)
-                ForEach(model.lastResults.filter { !$0.success }) { result in
+                let failures = model.lastResults.filter { !$0.success }
+                ForEach(failures) { result in
                     Text("✗ \(result.playlistName)").font(.caption2).foregroundColor(.red)
+                }
+                // Surface the sync script's combined output so a failure is
+                // actually diagnosable from the popover — previously the UI
+                // showed only the red playlist names with no hint of *why*
+                // they failed. Every failed result carries the same combined
+                // log, so show it once.
+                if let raw = failures.first?.output {
+                    let detail = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !detail.isEmpty {
+                        ScrollView {
+                            Text(detail)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(6)
+                        }
+                        .frame(maxHeight: 140)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
                 }
             }
 
