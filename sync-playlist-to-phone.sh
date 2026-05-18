@@ -176,6 +176,12 @@ TOTAL_SKIPPED=0
 TOTAL_MISSING=0
 M3U_PATHS=()
 
+# Per-playlist temp files are keyed by this loop index rather than the playlist
+# name: a name can contain characters that are illegal in a macOS path (notably
+# "/"), which would otherwise make the temp-file writes fail and silently drop
+# the playlist. An index is collision-proof whatever the name contains.
+pl_idx=0
+
 # When multiple playlists reference the same audio file, we want to stage it
 # once. The staging tree itself is the dedup index — we check if the target
 # symlink already exists before linking. Filesystem stat is O(1); the previous
@@ -183,7 +189,8 @@ M3U_PATHS=()
 # libraries.
 
 for PLAYLIST_NAME in "${ARGS[@]}"; do
-    track_list="$TMP_DIR/${PLAYLIST_NAME}.tracks.tsv"
+    pl_idx=$((pl_idx + 1))
+    track_list="$TMP_DIR/pl${pl_idx}.tracks.tsv"
     dump_playlist "$PLAYLIST_NAME" "$track_list"
     T "dumped \"$PLAYLIST_NAME\""
 
@@ -196,13 +203,13 @@ for PLAYLIST_NAME in "${ARGS[@]}"; do
 
     # 4a. Pre-compute file sizes in ONE batched stat call. LC_ALL=C so BSD cut/tr
     # don't choke on UTF-8 multi-byte chars in track paths.
-    mac_sizes="$TMP_DIR/${PLAYLIST_NAME}.sizes.tsv"
+    mac_sizes="$TMP_DIR/pl${pl_idx}.sizes.tsv"
     LC_ALL=C cut -f1 "$track_list" | LC_ALL=C tr '\n' '\0' | \
         xargs -0 -n 200 stat -f '%z	%N' 2>/dev/null > "$mac_sizes" || true
     T "  mac stat ($(wc -l < "$track_list" | tr -d ' ') tracks)"
 
     # 4b. Join sizes onto the track list.
-    sized="$TMP_DIR/${PLAYLIST_NAME}.sized.tsv"
+    sized="$TMP_DIR/pl${pl_idx}.sized.tsv"
     awk -F'\t' -v sizes_file="$mac_sizes" '
         BEGIN {
             while ((getline line < sizes_file) > 0) {
@@ -224,7 +231,7 @@ for PLAYLIST_NAME in "${ARGS[@]}"; do
         echo "→ Phone inventory: $phone_count file(s)"
         T "phone inventory joined ($phone_count files)"
     fi
-    decisions="$TMP_DIR/${PLAYLIST_NAME}.decisions.tsv"
+    decisions="$TMP_DIR/pl${pl_idx}.decisions.tsv"
     awk -F'\t' \
         -v phone_file="$PHONE_FILES" \
         -v music_root="$MAC_MUSIC_ROOT" \
