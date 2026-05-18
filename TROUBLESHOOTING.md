@@ -65,6 +65,16 @@ The Mac app uses Sparkle for auto-updates and checks the GitHub-Pages-hosted `ap
   adb logcat -d | grep -E "AutoImport|MigsMusic"
   ```
 
+## A sync fails — "Synced 0, N failed"
+
+When a sync fails, the popover shows a short explanation of *what* went wrong and *how* to fix it, with the full sync log underneath for the details. The most common causes:
+
+- **Music-library access not granted.** macOS hasn't given migs music permission to read your music. Click **Open Privacy Settings** in the failure box (or go to System Settings → Privacy & Security → Media & Apple Music), turn migs music on, then sync again.
+- **Phone disconnected mid-sync.** The cable came loose or the phone locked itself. Reconnect, unlock, and retry.
+- **A bundled helper was blocked by macOS.** On a fresh install macOS can quarantine the helper binary inside the app. The failure box prints the exact `xattr -dr com.apple.quarantine …` command to clear it.
+
+**Why a sync could previously fail *entirely*:** earlier versions had a bug where a single playlist whose name contained a character the phone's storage can't use in a filename — `< > : " / \ | ? *`, e.g. a playlist called `<3` — made `adb push` fail, which aborted the whole run and marked *every* selected playlist as failed. This is fixed: such playlists now sync with each illegal character replaced by `_` (so `<3` appears on the phone as `_3`), and a single file that genuinely can't be copied no longer drags the rest down with it. If you hit a blanket failure, update to the latest release.
+
 ## Sync is slow / hangs
 
 - **First sync of a large playlist** copies every audio file. Check `adb push` progress in the bash output. After that, re-syncing is effectively free (existing files are skipped).
