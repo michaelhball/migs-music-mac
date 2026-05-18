@@ -7,6 +7,26 @@ import Foundation
 ///
 /// We solve it by attaching a `readabilityHandler` that drains the pipe concurrently while
 /// the process runs. After exit, we detach the handler and append any tail data.
+/// Thread-safe accumulator. The pipe `readabilityHandler` closures run concurrently, so
+/// they can't mutate a captured `var` directly — they hold a reference to one of these
+/// and let it serialise appends behind its own lock.
+private final class DataBuffer {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+
+    func value() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
 enum ProcessRunner {
     struct Result {
         let stdout: String
@@ -37,20 +57,19 @@ enum ProcessRunner {
                 task.standardOutput = outPipe
                 task.standardError = errPipe
 
-                let lock = NSLock()
-                var outData = Data()
-                var errData = Data()
+                let outBuffer = DataBuffer()
+                let errBuffer = DataBuffer()
 
                 outPipe.fileHandleForReading.readabilityHandler = { handle in
                     let chunk = handle.availableData
                     guard !chunk.isEmpty else { return }
-                    lock.lock(); outData.append(chunk); lock.unlock()
+                    outBuffer.append(chunk)
                 }
                 if !mergeStreams {
                     errPipe.fileHandleForReading.readabilityHandler = { handle in
                         let chunk = handle.availableData
                         guard !chunk.isEmpty else { return }
-                        lock.lock(); errData.append(chunk); lock.unlock()
+                        errBuffer.append(chunk)
                     }
                 }
 
@@ -78,15 +97,13 @@ enum ProcessRunner {
                 if !mergeStreams { errPipe.fileHandleForReading.readabilityHandler = nil }
                 let outTail = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
                 let errTail = mergeStreams ? Data() : ((try? errPipe.fileHandleForReading.readToEnd()) ?? Data())
-                lock.lock()
-                outData.append(outTail)
-                errData.append(errTail)
-                lock.unlock()
+                outBuffer.append(outTail)
+                errBuffer.append(errTail)
 
                 continuation.resume(
                     returning: Result(
-                        stdout: String(data: outData, encoding: .utf8) ?? "",
-                        stderr: String(data: errData, encoding: .utf8) ?? "",
+                        stdout: String(data: outBuffer.value(), encoding: .utf8) ?? "",
+                        stderr: String(data: errBuffer.value(), encoding: .utf8) ?? "",
                         exitCode: task.terminationStatus
                     )
                 )
