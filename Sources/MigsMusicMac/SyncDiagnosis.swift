@@ -64,6 +64,19 @@ struct SyncDiagnosis {
             )
         }
 
+        // A file transfer to the phone was refused mid-sync.
+        if text.contains("could not copy playlist file")
+            || text.contains("operation not permitted")
+            || text.contains("no space left") {
+            return SyncDiagnosis(
+                title: "A file couldn’t be copied to the phone",
+                suggestion: "The phone refused a file transfer. Make sure it’s "
+                    + "unlocked and has free storage space, then sync again — if it "
+                    + "keeps happening, reconnect the USB cable.",
+                settingsURL: nil
+            )
+        }
+
         // Music-library access denied (TCC) — the most common first-run issue.
         if text.contains("media & apple music")
             || text.contains("music-library access")
