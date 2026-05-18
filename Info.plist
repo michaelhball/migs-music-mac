@@ -2,44 +2,31 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>migs music</string>
-    <key>CFBundleDisplayName</key>
-    <string>migs music</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.migsmusic.mac</string>
-    <key>CFBundleExecutable</key>
-    <string>MigsMusicMac</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
-    <!-- LSUIElement true → menu-bar app, no Dock icon, no main menu bar. The MenuBarExtra
-         status item is the entire UI surface. -->
-    <key>LSUIElement</key>
-    <true/>
-    <!-- Apple Events / Automation. We need to drive Music.app via osascript; macOS will
-         prompt the first time. Description shown in the system dialog. -->
-    <key>NSAppleEventsUsageDescription</key>
-    <string>migs music reads your Music app playlists so you can pick which ones to sync to your phone.</string>
-    <!-- Sparkle auto-update.
-         SUFeedURL: appcast hosted on GitHub Pages, updated on every release.
-         SUPublicEDKey: Ed25519 public key Sparkle uses to verify each update's
-         signature. The matching private key is in the macOS Keychain (account
-         "ed25519" under "https://sparkle-project.org") with backups documented
-         in workspace/SPARKLE_BACKUPS.md.
-         SUEnableAutomaticChecks: yes — Sparkle silently checks once a day in
-         the background. The user can also click the version label in the
-         popover footer to force a check immediately. -->
-    <key>SUFeedURL</key>
-    <string>https://michaelhball.github.io/migs-music-mac/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>KepJDVwz+MXZ4wA4EFNyMKnFebciFzNKrXTuO3GtDw8=</string>
-    <key>SUEnableAutomaticChecks</key>
-    <true/>
+	<key>CFBundleDisplayName</key>
+	<string>migs music</string>
+	<key>CFBundleExecutable</key>
+	<string>MigsMusicMac</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.migsmusic.mac</string>
+	<key>CFBundleName</key>
+	<string>migs music</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>3</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>migs music reads your Music app playlists so you can pick which ones to sync to your phone.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://michaelhball.github.io/migs-music-mac/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>KepJDVwz+MXZ4wA4EFNyMKnFebciFzNKrXTuO3GtDw8=</string>
 </dict>
 </plist>
