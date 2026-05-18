@@ -5,7 +5,11 @@ Build internals, architecture, contribution notes.
 ## Prerequisites
 
 - macOS 13+.
-- Swift toolchain (Xcode Command Line Tools is enough — no full Xcode required).
+- **Full Xcode** (from the App Store). The Command Line Tools alone are *not* enough: `swift build` resolves the destination via `xcrun --show-sdk-platform-path` and SwiftPM needs the macOS *Platform* bundle to resolve the Sparkle xcframework — neither exists in a CLT-only install, so the build fails with `xcrun: error: unable to lookup item 'PlatformPath'`. After installing Xcode, point the toolchain at it:
+  ```bash
+  sudo xcode-select --switch /Applications/Xcode.app
+  xcrun --sdk macosx --show-sdk-platform-path   # should now print a path, not an error
+  ```
 - ADB on PATH or under one of: `~/Library/Android/sdk/platform-tools`, `/usr/local/bin`, `/opt/homebrew/bin`.
 
 ## Build
