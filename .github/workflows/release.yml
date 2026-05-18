@@ -139,7 +139,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DMG="dist/migs-music-${{ steps.version.outputs.version }}.dmg"
+          DMG="dist/MigsMusic.dmg"
           if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
             gh release upload "v${{ steps.version.outputs.version }}" "$DMG" --clobber
           else

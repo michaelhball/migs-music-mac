@@ -74,7 +74,7 @@ echo "→ Running build.sh..."
 # guarantees the DMG contents match what Sparkle will sign-update.
 codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null 2>&1 || true
 
-DMG_NAME="migs-music-${VERSION}.dmg"
+DMG_NAME="MigsMusic.dmg"
 DMG_PATH="dist/${DMG_NAME}"
 echo "→ Building $DMG_PATH..."
 rm -f "$DMG_PATH"
