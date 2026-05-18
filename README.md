@@ -14,24 +14,31 @@ Menu-bar app that syncs Apple Music playlists to the [migs music](../migs-music)
 - Auto-detects when a phone is plugged in or unplugged — no Refresh button.
 - Auto-updates via Sparkle once the first install is in place.
 
-## Installing
+## Setup
 
-Download the latest `.dmg` from [the Releases page](https://github.com/michaelhball/migs-music-mac/releases/latest), open it, drag `MigsMusicMac.app` onto the `Applications` shortcut.
+Everything you need on a fresh Mac.
 
-First launch:
+### Install these
 
-1. Right-click the app in Applications and choose **Open** (the app isn't notarised, so the first launch needs this manual override; Gatekeeper remembers it after).
-2. macOS will ask to allow controlling Music.app — accept.
-3. Click the menu-bar music-note icon to open the popover.
+| What | How |
+|---|---|
+| **MigsMusicMac.app** | Download the latest `.dmg` from [Releases](https://github.com/michaelhball/migs-music-mac/releases/latest), open it, drag the app onto `Applications`. |
+| **adb** | `brew install android-platform-tools` (or use the copy bundled with Android Studio). |
+| **migs music** on your phone | Install the [Android app](https://github.com/michaelhball/migs-music). |
+| **Apple Music** | The system app — already present on macOS 13+, nothing to install. |
 
-After that, every later release updates itself: Sparkle checks once a day in the background. You can also click the version number in the popover footer to check on demand.
+### Grant these permissions
 
-## Prerequisites
+| Where | What to do | Why |
+|---|---|---|
+| Mac — first launch | Right-click the app → **Open**, then confirm the dialog | The app isn't notarised; Gatekeeper needs a one-time manual override. |
+| Mac | **System Settings → Privacy & Security → Media & Apple Music** → turn on migs music | Lets the app read your Music library. macOS prompts for this on first launch — if you miss the prompt, enable it here. |
+| Phone | **Settings → Developer options → USB debugging** → on | Lets `adb` talk to the phone. (Unlock Developer options by tapping *Build number* 7× under Settings → About phone.) |
+| Phone | Plug in via USB, accept the **"Allow USB debugging?"** dialog | Authorises this specific Mac — tick "Always allow from this computer". |
 
-- macOS 13+ with Apple Music (the system app, free).
-- `adb` installed: `brew install android-platform-tools`, or it ships with Android Studio.
-- Android phone with USB debugging on, plugged in, authorised (`adb devices` should list it).
-- The [migs music Android app](https://github.com/michaelhball/migs-music) installed on the phone.
+It's working when `adb devices` lists your phone and the app's popover shows your playlists.
+
+Updates are automatic after the first install — Sparkle checks once a day in the background; you can also click the version number in the popover footer to check on demand.
 
 ## Usage
 
