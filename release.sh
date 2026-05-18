@@ -172,7 +172,10 @@ fi
 
 # Insert the new <item> right after <language>. Newest entry first — Sparkle picks
 # the highest version regardless of order, but humans reading the file expect chronological.
-NEW_ITEM=$(cat <<EOF
+# The item goes via a temp file: macOS BSD awk rejects newlines in `-v var=`
+# assignments, so passing a multi-line block that way silently drops it.
+ITEM_FILE=$(mktemp)
+cat > "$ITEM_FILE" <<EOF
         <item>
             <title>migs music ${VERSION}</title>
             <pubDate>${PUB_DATE}</pubDate>
@@ -182,12 +185,17 @@ NEW_ITEM=$(cat <<EOF
             <enclosure url="${DOWNLOAD_URL}" type="application/octet-stream" ${SIGN_OUTPUT} />
         </item>
 EOF
-)
 
-awk -v item="$NEW_ITEM" '
-    /<\/language>/ { print; print item; next }
+awk -v itemfile="$ITEM_FILE" '
+    /<\/language>/ {
+        print
+        while ((getline line < itemfile) > 0) print line
+        close(itemfile)
+        next
+    }
     { print }
 ' "$APPCAST" > "${APPCAST}.tmp" && mv "${APPCAST}.tmp" "$APPCAST"
+rm -f "$ITEM_FILE"
 
 echo ""
 echo "✓ Release artefacts ready:"
