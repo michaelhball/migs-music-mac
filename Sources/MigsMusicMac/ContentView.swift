@@ -330,6 +330,11 @@ private struct FooterView: View {
                 // but the copy now tells the user something happened.
                 if let staged = updateState.availableVersion {
                     Button {
+                        // LSUIElement apps don't activate themselves, so Sparkle's update
+                        // dialog comes up behind everything else and is unreachable (no
+                        // Dock icon, no Cmd-Tab entry). Activate explicitly so the dialog
+                        // takes focus and the user actually sees it.
+                        NSApp.activate(ignoringOtherApps: true)
                         updater.checkForUpdates()
                     } label: {
                         Label("Update available", systemImage: "arrow.down.circle.fill")
@@ -341,6 +346,7 @@ private struct FooterView: View {
                     .padding(.trailing, 4)
                 } else {
                     Button {
+                        NSApp.activate(ignoringOtherApps: true)
                         updater.checkForUpdates()
                     } label: {
                         Text("v\(appVersion)")
