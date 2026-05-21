@@ -31,7 +31,7 @@ Everything you need on a fresh Mac.
 
 | Where | What to do | Why |
 |---|---|---|
-| Mac — first launch | Right-click the app → **Open**, then confirm the dialog | The app isn't notarised; Gatekeeper needs a one-time manual override. |
+| Mac — first launch | Double-clicking the app will be blocked by Gatekeeper. Either **right-click → Open** → confirm, **or** open **System Settings → Privacy & Security**, scroll to the "migs music was blocked" notice, and click **Open Anyway**. One-time per Mac. | The app isn't notarised; Gatekeeper needs a one-time manual override. |
 | Mac | **System Settings → Privacy & Security → Media & Apple Music** → turn on migs music | Lets the app read your Music library. macOS prompts for this on first launch — if you miss the prompt, enable it here. |
 | Phone | **Settings → Developer options → USB debugging** → on | Lets `adb` talk to the phone. (Unlock Developer options by tapping *Build number* 7× under Settings → About phone.) |
 | Phone | Plug in via USB, accept the **"Allow USB debugging?"** dialog | Authorises this specific Mac — tick "Always allow from this computer". |
