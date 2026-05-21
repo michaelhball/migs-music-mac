@@ -337,12 +337,23 @@ private struct FooterView: View {
                         NSApp.activate(ignoringOtherApps: true)
                         updater.checkForUpdates()
                     } label: {
+                        // contentShape so the entire label (icon + text + the gap between
+                        // them) registers clicks — without it the borderless style only
+                        // hit-tests the rendered glyphs and the gap is dead space.
                         Label("Update available", systemImage: "arrow.down.circle.fill")
                             .font(.caption)
                             .foregroundColor(.accentColor)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
                     .help("migs music v\(staged) is available. Click to install.")
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
                     .padding(.trailing, 4)
                 } else {
                     Button {
@@ -352,9 +363,17 @@ private struct FooterView: View {
                         Text("v\(appVersion)")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
                     .help("migs music \(appVersion). Click to check for updates. Sparkle also checks once a day automatically.")
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
                     .padding(.trailing, 4)
                 }
 
