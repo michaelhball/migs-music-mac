@@ -362,7 +362,11 @@ private struct FooterView: View {
                     } label: {
                         Text("v\(appVersion)")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            // .secondary washes out almost to invisible against the
+                            // popover's translucent background in Light mode (it reads
+                            // fine in Dark mode, which is why it slipped through). A
+                            // slightly dimmed .primary stays legible in both appearances.
+                            .foregroundColor(.primary.opacity(0.8))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
