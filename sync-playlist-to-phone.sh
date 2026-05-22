@@ -56,8 +56,31 @@ if ! adb get-state > /dev/null 2>&1; then
 fi
 T "adb get-state ok"
 
+# Single-instance lock. Two syncs running at once both tar-stream into
+# /sdcard/Music and race each other — corrupting half-written files and
+# leaving the phone in a mangled state. The GUI's in-memory `syncing` flag
+# only guards within one app session: if the app is quit and relaunched while
+# an earlier sync's process is still alive, the new session has no idea and
+# would happily start a second one. This lock is process-level and survives
+# that — a fixed path under /tmp so app runs and manual terminal runs contend
+# for the same lock. `mkdir` is atomic, so it doubles as the lock primitive.
+LOCK_DIR="/tmp/migs-sync-playlist.lock"
+if ! mkdir "$LOCK_DIR" 2> /dev/null; then
+    lock_pid=$(cat "$LOCK_DIR/pid" 2> /dev/null || echo "")
+    if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2> /dev/null; then
+        echo "✗ A sync is already running (pid $lock_pid). Let it finish, or stop it first." >&2
+        exit 1
+    fi
+    # The lock dir exists but its owner is gone — a previous run was killed
+    # before it could clean up. Reclaim the stale lock.
+    echo "⚠ Clearing a stale sync lock left by a killed run (pid ${lock_pid:-unknown})." >&2
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2> /dev/null || { echo "✗ Could not acquire the sync lock." >&2; exit 1; }
+fi
+echo "$$" > "$LOCK_DIR/pid"
+
 TMP_DIR=$(mktemp -d -t migs-sync-XXXX)
-trap "rm -rf $TMP_DIR" EXIT
+trap 'rm -rf "$TMP_DIR" "$LOCK_DIR"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
