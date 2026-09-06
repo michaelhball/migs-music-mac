@@ -14,7 +14,9 @@
 #      already on the phone — even at a different path — aren't re-pushed.
 #   3. Stages every missing track (across all playlists) into a single local
 #      tree, then streams the whole tree to the phone via one `adb shell tar`.
-#   4. Pushes one M3U per playlist into /sdcard/Android/media/com.migsmusic/sync/.
+#   4. Pushes one M3U per playlist into /sdcard/Android/media/<package>/sync/, where
+#      <package> is $MIGS_PACKAGE (default com.migsmusic; com.migsmusic.debug for a
+#      debug build of the Android app, which installs as a separate app).
 #   5. Broadcasts AUTO_IMPORT once at the end (unless --no-broadcast).
 
 set -euo pipefail
@@ -85,8 +87,11 @@ trap 'rm -rf "$TMP_DIR" "$LOCK_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 2. Locate migs-tracks (preferred) or fall back to AppleScript.
-MIGS_TRACKS=""
+# $MIGS_TRACKS lets a caller point at a helper elsewhere (e.g. the one inside the
+# installed MigsMusicMac.app when running this script from a bare repo checkout).
+MIGS_TRACKS="${MIGS_TRACKS:-}"
 for candidate in \
+    "$MIGS_TRACKS" \
     "$SCRIPT_DIR/migs-tracks" \
     "$SCRIPT_DIR/.build/release/migs-tracks" \
     "$SCRIPT_DIR/.build/debug/migs-tracks"; do
@@ -176,7 +181,8 @@ for candidate in \
 done
 
 PHONE_MUSIC_ROOT="/sdcard/Music"
-PHONE_SYNC_DIR="/sdcard/Android/media/com.migsmusic/sync"
+PHONE_PACKAGE="${MIGS_PACKAGE:-com.migsmusic}"
+PHONE_SYNC_DIR="/sdcard/Android/media/$PHONE_PACKAGE/sync"
 STAGE_DIR="$TMP_DIR/stage"
 mkdir -p "$STAGE_DIR"
 
@@ -376,7 +382,7 @@ T "pushed sync-stats sidecar"
 # 7. Trigger migs music's auto-import (once, after all M3Us land).
 imported_on_phone=true
 if [[ "$BROADCAST_ON_DONE" == true ]]; then
-    adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p com.migsmusic -f 0x20" > /dev/null 2>&1 || true
+    adb shell "am broadcast -a com.migsmusic.AUTO_IMPORT -p $PHONE_PACKAGE -f 0x20" > /dev/null 2>&1 || true
     T "broadcast"
 
     imported_on_phone=false
